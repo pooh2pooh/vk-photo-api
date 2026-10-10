@@ -156,6 +156,13 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.state code {
+  background: var(--surface-2);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 0.85em;
+}
+
 .lightbox {
   position: fixed;
   inset: 0;

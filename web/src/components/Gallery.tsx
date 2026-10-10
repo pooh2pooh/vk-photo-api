@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Photo } from "../api/types.js";
-import { PAGE_SIZE, usePhotos } from "../hooks/usePhotos.js";
+import { VkApiError } from "../api/client.js";
+import { usePhotos, usePageSize } from "../hooks/usePhotos.js";
 import { Lightbox } from "./Lightbox.js";
 import { Pagination } from "./Pagination.js";
 import { PhotoCard } from "./PhotoCard.js";
@@ -9,8 +10,9 @@ export function Gallery() {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Photo | null>(null);
   const query = usePhotos(page);
+  const pageSize = usePageSize();
 
-  const totalPages = query.data ? Math.max(1, Math.ceil(query.data.total / PAGE_SIZE)) : 1;
+  const totalPages = query.data ? Math.max(1, Math.ceil(query.data.total / pageSize)) : 1;
   const isRefetching = query.isFetching && !query.isLoading;
 
   return (
@@ -34,16 +36,14 @@ export function Gallery() {
       </header>
 
       {query.isError ? (
-        <div className="state state--error">
-          <p>Не удалось загрузить фотографии.</p>
-          <p className="state__detail">{(query.error as Error).message}</p>
-          <button type="button" onClick={() => query.refetch()}>
-            Повторить
-          </button>
-        </div>
+        <ErrorState
+          error={query.error}
+          key={String(query.error)}
+          onRetry={() => query.refetch()}
+        />
       ) : query.isLoading ? (
         <div className="grid" aria-busy="true">
-          {Array.from({ length: PAGE_SIZE }).map((_, index) => (
+          {Array.from({ length: pageSize }).map((_, index) => (
             <div key={index} className="photo-card photo-card--skeleton" />
           ))}
         </div>
@@ -69,5 +69,38 @@ export function Gallery() {
 
       {selected ? <Lightbox photo={selected} onClose={() => setSelected(null)} /> : null}
     </section>
+  );
+}
+
+interface ErrorStateProps {
+  error: unknown;
+  onRetry: () => void;
+}
+
+function ErrorState({ error, onRetry }: ErrorStateProps) {
+  const isNoToken = error instanceof VkApiError && error.code === "NO_TOKEN";
+  const message = error instanceof Error ? error.message : String(error);
+
+  return (
+    <div className="state state--error">
+      {isNoToken ? (
+        <>
+          <p>Приложение не настроено.</p>
+          <p className="state__detail">
+            Откройте файл <code>config.js</code> рядом с этим приложением и впишите свой
+            <code> accessToken </code> (токен ВКонтакте со scope photos). После этого обновите
+            страницу.
+          </p>
+        </>
+      ) : (
+        <>
+          <p>Не удалось загрузить фотографии.</p>
+          <p className="state__detail">{message}</p>
+          <button type="button" onClick={onRetry}>
+            Повторить
+          </button>
+        </>
+      )}
+    </div>
   );
 }

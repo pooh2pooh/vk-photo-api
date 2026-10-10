@@ -1,135 +1,84 @@
 # VK Saved Photos
 
 Веб-интерфейс для просмотра и управления фотографиями из альбома «Сохранённые фото» ВКонтакте.
-TypeScript, чистая архитектура, задел под поэтапное масштабирование до ИИ-поиска.
+Статическое приложение на TypeScript: **скопировал в любую поддиректорию веб-сервера — работает сразу**.
 
-## Этап 1 (текущий): галерея с пагинацией
+## Как запустить (простая схема, без Node-сервера)
 
-- Бэкенд: Fastify + чистая архитектура (domain / application / infrastructure / presentation).
-- Клиент VK API: таймауты, ретраи с экспоненциальным backoff и jitter, маппинг ошибок VK.
-- Фронтенд: React + Vite + TanStack Query, адаптивная сетка, ленивая загрузка изображений,
-  skeleton-загрузка, lightbox, пагинация с сохранением предыдущих данных.
+1. Собери приложение (`npm ci && npm run build`), либо возьми готовую сборку из корня
+   репозитория (`index.html`, `assets/`, `config.js`).
+2. Скопируй содержимое репозитория в любую поддиректорию веб-сервера:
 
-## Требования
+   ```bash
+   cp -r <repo> /var/www/html/vkphotos   # например
+   ```
 
-- Node.js >= 20
-- Access token ВКонтакте со scope `photos`
-  (токен личного профиля для альбома «Сохранённые фото»)
+3. Открой в редакторе `config.js` (лежит рядом с `index.html`) и впиши токен:
 
-## Настройка
+   ```js
+   window.VK_CONFIG = {
+     accessToken: "ваш_токен", // scope photos
+     albumId: "saved",         // «Сохранённые фото»
+     ownerId: "",              // пусто = владелец токена
+     pageSize: 30
+   };
+   ```
+
+4. Открой `http://<host>/vkphotos/` — галерея работает.
+
+Приложение полностью статическое: обращается к VK API напрямую через JSONP (VK не отдаёт CORS
+для `fetch`), относительные пути заданы так, что неважно, в какую поддиректорию положить сборку.
+Node-бэкенд для этого не нужен.
+
+> ⚠️ Токен лежит в `config.js` открытым текстом и доступен любому, у кого есть адрес страницы.
+> Так задумано для простоты. Используй это на личном/доверенном сервере и не выкладывай
+> репозиторий в открытый доступ. Если нужен скрытый токен — подними Node-сервер (см. ниже).
+
+## Разработка
 
 ```bash
 npm install
-cp .env.example .env
-# открой .env и вставь свой VK_TOKEN
+npm run dev            # vite dev на http://localhost:5173
+npm run build          # сборка статики в корень репозитория
 ```
 
-`.env`:
+## Дополнительно: Node-API-сервер (для будущих этапов)
 
-```dotenv
-VK_TOKEN=ваш_токен
-VK_API_VERSION=5.199
-VK_ALBUM_ID=saved      # "saved" = Сохранённые фото
-VK_OWNER_ID=           # пусто = владелец токена
-PORT=3001
-VK_TIMEOUT_MS=10000
-VK_RETRY_ATTEMPTS=3
-```
-
-> Токен используется только на сервере и никогда не передаётся в браузер.
-
-## Запуск
+В `server/` лежит опциональный Fastify-сервер (чистая архитектура, клиент VK API с ретраями).
+Пока фронтенд ходит в VK напрямую, он не нужен. Он пригодится для этапов, где понадобится
+скрывать токен, кэшировать медиа и считать CLIP-эмбеддинги (ИИ-поиск).
 
 ```bash
-npm run dev        # server (http://localhost:3001) + web (http://localhost:5173)
+cp .env.example .env   # впиши VK_TOKEN
+npm run dev:server     # http://localhost:3001, GET /api/photos
 ```
 
-Открой http://localhost:5173 — Vite проксирует `/api` на бэкенд.
-
-Продакшн:
-
-```bash
-npm run build
-npm start          # отдаёт API на PORT; статику web/ собирай отдельно (web/dist)
-```
-
-## API
-
-| Метод | Путь | Описание |
-| ----- | ---- | -------- |
-| `GET` | `/api/health` | Состояние сервиса |
-| `GET` | `/api/photos?offset=0&count=30` | Страница фото альбома |
-
-Ответ `/api/photos`:
-
-```json
-{
-  "total": 1234,
-  "offset": 0,
-  "count": 30,
-  "hasMore": true,
-  "items": [
-    {
-      "id": 457239024,
-      "ownerId": 743784474,
-      "albumId": -15,
-      "width": 1080,
-      "height": 720,
-      "text": "",
-      "date": 1673516629,
-      "thumbnailUrl": "https://.../photo.jpg",
-      "displayUrl": "https://.../photo.jpg"
-    }
-  ]
-}
-```
-
-Ошибки имеют единый формат:
-
-```json
-{ "error": { "code": "VK_RATE_LIMITED", "message": "..." } }
-```
-
-## Архитектура
+## Структура
 
 ```
-server/src/
-├─ domain/          # сущности и ошибки, без внешних зависимостей
-│  ├─ photo.ts
-│  ├─ pagination.ts
-│  └─ errors.ts
-├─ application/     # сценарии + порты (интерфейсы)
-│  ├─ ports/VkGateway.ts
-│  └─ usecases/GetAlbumPhotos.ts
-├─ infrastructure/  # адаптеры: VK HTTP, retry
-│  ├─ retry.ts
-│  └─ vk/{VkHttpClient,VkPhotoGateway}.ts
-└─ presentation/    # HTTP-слой (Fastify)
-   └─ http/{server,dto,routes/*}.ts
-
-web/src/
-├─ api/             # типизированный клиент
-├─ hooks/           # usePhotos (TanStack Query)
-└─ components/      # Gallery, PhotoCard, Pagination, Lightbox
+index.html          # точка входа (собранный SPA, относительные пути)
+assets/             # собранный JS/CSS
+config.js           # токен и настройки (копируется из web/public)
+web/                # React + Vite (исходники)
+│  └─ src/
+│     ├─ api/       # config, JSONP-клиент VK, маппинг фото
+│     ├─ hooks/     # usePhotos (TanStack Query, пагинация)
+│     └─ components/# Gallery, PhotoCard, Pagination, Lightbox
+server/             # опциональный Node-бэкенд: domain/application/infrastructure/presentation
 ```
-
-Зависимости направлены внутрь: `presentation → application → domain`,
-а инфраструктура подключается через порты на этапе композиции (`server/src/index.ts`).
-Замена источника данных или добавление кэша не затрагивает домен и сценарии.
 
 ## План масштабирования
 
-- **Этап 2 — кэш и устойчивость.** SQLite для метаданных, кэш миниатюр (`sharp`),
-  инкрементальная синхронизация альбома, SSE/фоновые задачи.
-- **Этап 3 — ИИ-поиск.** CLIP-эмбеддинги (`@huggingface/transformers`, ONNX, CPU),
-  векторный индекс (`sqlite-vec` / pgvector), семантический поиск текстом.
-- **Этап 4 — управление.** Удаление/копирование фото в ВК, фильтры, теги, авторизация.
+- **Этап 1 (сейчас)** — статическая галерея с пагинацией, работающая в любой поддиректории.
+- **Этап 2** — Node-сервер для кэша/синхронизации, клиент переключается на `/api` (когда сервер доступен).
+- **Этап 3** — ИИ-поиск: CLIP-эмбеддинги, векторный индекс, семантический текстовый поиск.
 
 ## Скрипты
 
 | Команда | Действие |
 | ------- | -------- |
-| `npm run dev` | Запуск сервера и фронтенда |
-| `npm run build` | Сборка обоих пакетов |
+| `npm run dev` | Vite dev-сервер |
+| `npm run build` | Сборка обоих пакетов (статика в корень) |
 | `npm run typecheck` | Проверка типов |
-| `npm start` | Запуск собранного сервера |
+| `npm run dev:server` | Опциональный Node-API-сервер |
+| `npm start` | Запуск собранного Node-сервера |
