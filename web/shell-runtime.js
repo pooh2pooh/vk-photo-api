@@ -30,6 +30,8 @@
   var READY_WATCHDOG = CONFIG.readyWatchdogMs || 20000;
   var POST_INJECT_TIMEOUT = CONFIG.postInjectTimeoutMs || 4000;
   var EARLY_FALLBACK = CONFIG.earlyFallbackMs || 1500;
+  var RANGE_CHUNK = CONFIG.rangeChunkBytes || 8192;
+  var RANGE_POOL = CONFIG.rangePool || 4;
   var MIRRORS = window.__VK_SHELL_MIRRORS__ || {};
   var JS_MIRRORS = MIRRORS.js || [];
   var CSS_MIRRORS = MIRRORS.css || [];
@@ -481,15 +483,205 @@
     return url + (url.indexOf("?") === -1 ? "?" : "&") + "shellcb=" + Date.now();
   }
 
+  function header(r, name) {
+    try { if (r && r.headers && r.headers.get) return r.headers.get(name); } catch (e) {}
+    return null;
+  }
+
+  // Чтение тела с таймаутом: некоторые движки (Яндекс.Браузер) отдают
+  // заголовки 200 с верным Content-Length, а само тело не присылают вовсе.
+  function readBody(r, ms) {
+    ms = ms || TIMEOUT;
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        try { if (r && r.body && r.body.cancel) r.body.cancel(); } catch (e) {}
+        reject(new Error("таймаут чтения тела " + ms + "мс"));
+      }, ms);
+      r.text().then(
+        function (t) { if (!done) { done = true; clearTimeout(timer); resolve(t); } },
+        function (e) { if (!done) { done = true; clearTimeout(timer); reject(e); } },
+      );
+    });
+  }
+
+  function parseContentRange(value) {
+    if (!value) return null;
+    var m = /bytes\s+(\d+)-(\d+)\/(\d+)/i.exec(String(value));
+    if (!m) return null;
+    return { start: +m[1], end: +m[2], total: +m[3] };
+  }
+
+  function isYandex() {
+    try {
+      return typeof navigator !== "undefined" && /YaBrowser|yabrowser/i.test(navigator.userAgent || "");
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Длина строки в УТФ-8 байтах (подпись Content-Range говорит про байты,
+  // а длина JS-строки — про символы; кириллица в бандле не совпадала бы).
+  function utf8Bytes(s) {
+    try {
+      if (typeof TextEncoder === "function") return new TextEncoder().encode(s).length;
+    } catch (e) {}
+    try {
+      return new Blob([s]).size;
+    } catch (e) {}
+    return s.length;
+  }
+
+  // Почастевая загрузка бандла Range-запросами по ~RANGE_CHUNK байт:
+  // каждая порция — маленький ответ (~8 КБ), которые доезжают даже там,
+  // где большие тела «вечно» не приходят (Яндекс.Браузер).
+  function rangeDownload(url, chunkSize, poolSize) {
+    chunkSize = chunkSize || RANGE_CHUNK;
+    poolSize = poolSize || RANGE_POOL;
+    var total = 0;
+    return new Promise(function (resolve, reject) {
+      // Первый кусок — он же проба: размер файла узнаём из Content-Range.
+      fetchWithTimeout(url, {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { Range: "bytes=0-" + (chunkSize - 1) },
+      }, TIMEOUT)
+        .then(function (r) {
+          if (!r || r.status !== 206 || !r.ok) {
+            var e = new Error("диапазоны не поддерживаются (статус " + (r && r.status) + ")");
+            e.code = "RANGE_UNSUPPORTED";
+            throw e;
+          }
+          var meta = parseContentRange(header(r, "content-range"));
+          if (!meta) {
+            var e2 = new Error("нет Content-Range в ответе");
+            e2.code = "RANGE_UNSUPPORTED";
+            throw e2;
+          }
+          total = meta.total;
+          return readBody(r, TIMEOUT).then(function (t0) {
+            return { first: t0, total: meta.total, firstEnd: meta.end };
+          });
+        })
+        .then(function (info) {
+          if (!info) return null;
+          var pos = info.firstEnd + 1;
+          var remaining = [];
+          var idx = 0;
+          while (pos < info.total) {
+            remaining.push({ start: pos, end: Math.min(pos + chunkSize - 1, info.total - 1), idx: idx++ });
+            pos += chunkSize;
+          }
+          if (remaining.length === 0) return info.first;
+
+          return new Promise(function (resolvePool, rejectPool) {
+            var slots = new Array(remaining.length);
+            var doneCount = 0;
+            var failed = false;
+            var cursor = 0;
+            function worker() {
+              if (failed) return;
+              if (cursor >= remaining.length) return;
+              var p = remaining[cursor++];
+              fetchWithTimeout(url, {
+                credentials: "same-origin",
+                cache: "no-store",
+                headers: { Range: "bytes=" + p.start + "-" + p.end },
+              }, TIMEOUT)
+                .then(function (r) {
+                  if (failed) return;
+                  if (!r || r.status !== 206 || !r.ok) {
+                    failed = true;
+                    rejectPool(new Error("диапазон " + p.start + " не отдан (статус " + (r && r.status) + ")"));
+                    return;
+                  }
+                  return readBody(r, TIMEOUT).then(function (t) {
+                    if (failed) return;
+                    slots[p.idx] = t;
+                    doneCount++;
+                    if (doneCount === remaining.length) {
+                      var full = info.first;
+                      for (var i = 0; i < slots.length; i++) full += slots[i];
+                      if (utf8Bytes(full) !== total) {
+                        rejectPool(new Error("длина не сходится: " + utf8Bytes(full) + " вместо " + total));
+                        return;
+                      }
+                      resolvePool(full);
+                    } else {
+                      worker();
+                    }
+                  });
+                })
+                .catch(function (e) {
+                  if (failed) return;
+                  failed = true;
+                  rejectPool(e);
+                });
+            }
+            for (var i = 0; i < Math.min(poolSize, remaining.length); i++) worker();
+          });
+        })
+        .then(function (fullText) {
+          if (fullText == null) resolve("");
+          else resolve(fullText);
+        })
+        .catch(function (e) { reject(e); });
+    });
+  }
+
+  // Собрали бандл диапазонами — выполнить инлайн и дождаться готовности.
+  function rangeDownloadThenRun(url, onFail) {
+    write("net", "Скачиваю бандл диапазонами: " + url);
+    rangeDownload(url)
+      .then(function (text) {
+        if (!text) throw new Error("пустой ответ");
+        write("info", "Диапазоны: собрано " + text.length + " байт");
+        if (/^\s*</.test(text)) throw new Error("ответ похож на HTML, а не на JS");
+        write("warn", "Выполняю бандл диапазонов инлайн");
+        injectJsFromText(text, "ranges");
+        var deadline = now() + POST_INJECT_TIMEOUT;
+        (function check() {
+          if (window.__APP_READY__) { markReady(); return; }
+          if (now() >= deadline) { if (onFail) onFail(); else scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+          setTimeout(check, 100);
+        })();
+      })
+      .catch(function (e) {
+        write("error", "Диапазоны не удались: " + (e && (e.message || e)));
+        if (onFail) onFail();
+        else scheduleFallback(e && e.code === "RANGE_UNSUPPORTED" ? "RESOURCES_UNAVAILABLE" : "RANGE_FAILED");
+      });
+  }
+
+  // Для Яндекс.Браузера: основной путь — сразу Range-скачивание (сначала
+  // через PHP, затем статическим файлом), целые тела там не доезжают.
+  function startYandexPrimary() {
+    var sources = [];
+    if (JS_ASSET) sources.push(JS_ASSET);
+    if (JS && (!JS_ASSET || JS !== JS_ASSET)) sources.push(JS);
+    write("warn", "Яндекс.Браузер: заряжаю бандл Range-кусками вместо целого тела");
+    var srcIndex = 0;
+    function tryNext() {
+      if (window.__APP_READY__) { markReady(); return; }
+      if (srcIndex >= sources.length) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+      rangeDownloadThenRun(sources[srcIndex++], tryNext);
+    }
+    tryNext();
+  }
+
   // Последний резерв: забрать бандл через fetch и выполнить инлайн.
   // Работает, когда статический <script> блокируется молча (без load/error).
-  // Сначала пробуем ответ PHP (gzip, маленький по проводу), затем статику.
+  // Сначала пробуем ответ PHP (gzip, маленький по проводу), затем статику,
+  // затем почастевое Range-скачивание (для движков с «вечно» висящим телом).
   function runLocalFetchThenStub() {
     if (typeof fetch !== "function") { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
 
     var candidates = [];
     if (JS_ASSET) candidates.push(JS_ASSET);
     candidates.push(JS);
+    candidates.push({ range: JS_ASSET || JS });
 
     // HEAD-проба: проверяет, отвечает ли сервер вообще (без тела).
     fetchWithTimeout(candidates[0], { method: "HEAD", credentials: "same-origin", cache: "no-store" }, TIMEOUT)
@@ -501,6 +693,10 @@
       if (window.__APP_READY__) { markReady(); return; }
       if (index >= candidates.length) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
       var base = candidates[index++];
+      if (base && base.range) {
+        rangeDownloadThenRun(base.range);
+        return;
+      }
       var url = withCacheBuster(base);
       write("net", "Резервный fetch " + url);
       var started = now();
@@ -509,7 +705,7 @@
           var ms = Math.round(now() - started);
           write(r.ok ? "ok" : "error", "GET " + base + " → " + r.status + " " + headerSummary(r) + " " + ms + "мс");
           if (!r.ok) return null;
-          return r.text();
+          return readBody(r, TIMEOUT);
         })
         .then(function (t) {
           if (!t) { next(); return; }
@@ -777,6 +973,19 @@
       write("info", "Бандл встроен в HTML (внешний запрос не требуется)");
       finalTimer = setTimeout(function () {
         if (!window.__APP_READY__) showFallback("APP_TIMEOUT");
+      }, READY_WATCHDOG);
+      return;
+    }
+
+    // Яндекс.Браузер не читает большие тела (200 приходит, байты — нет):
+    // качаем бандл маленькими Range-кусками и не дёргаем целые файлы.
+    if (isYandex()) {
+      startYandexPrimary();
+      finalTimer = setTimeout(function () {
+        if (!window.__APP_READY__) {
+          write("warn", "Range-загрузка не завершилась за " + READY_WATCHDOG + "мс");
+          scheduleFallback("APP_TIMEOUT");
+        }
       }, READY_WATCHDOG);
       return;
     }
