@@ -17,3 +17,12 @@ export interface PhotosPage {
   hasMore: boolean;
   items: Photo[];
 }
+
+export interface SessionState {
+  authorized: boolean;
+  setupRequired?: boolean;
+}
+
+export interface AuthResult {
+  authorized: boolean;
+}

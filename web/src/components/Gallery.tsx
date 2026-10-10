@@ -1,46 +1,62 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Photo } from "../api/types.js";
-import { VkApiError, GROUP_AUTH_ERROR_CODE } from "../api/client.js";
+import { ApiError, GROUP_AUTH_ERROR_CODE } from "../api/client.js";
 import { usePhotos, usePageSize } from "../hooks/usePhotos.js";
 import { Lightbox } from "./Lightbox.js";
 import { Pagination } from "./Pagination.js";
 import { PhotoCard } from "./PhotoCard.js";
 
-export function Gallery() {
+interface GalleryProps {
+  onLogout: () => void;
+  onSessionExpired: () => void;
+}
+
+export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Photo | null>(null);
   const query = usePhotos(page);
   const pageSize = usePageSize();
 
+  const busy = query.isFetching;
   const totalPages = query.data ? Math.max(1, Math.ceil(query.data.total / pageSize)) : 1;
-  const isRefetching = query.isFetching && !query.isLoading;
+
+  useEffect(() => {
+    if (query.error instanceof ApiError && query.error.status === 401) {
+      onSessionExpired();
+    }
+  }, [query.error, onSessionExpired]);
+
+  useEffect(() => {
+    document.body.classList.toggle("cursor-progress", busy);
+    return () => document.body.classList.remove("cursor-progress");
+  }, [busy]);
 
   return (
-    <section className="gallery">
+    <section className="gallery" data-busy={busy ? "true" : "false"}>
       <header className="gallery__header">
         <div>
           <h1>Сохранённые фото ВКонтакте</h1>
           <p className="gallery__subtitle">
             {query.data ? `Всего: ${query.data.total}` : "Загрузка…"}
-            {isRefetching ? " · обновление…" : ""}
+            {busy ? " · обновление…" : ""}
           </p>
         </div>
-        <button
-          type="button"
-          className="gallery__refresh"
-          onClick={() => query.refetch()}
-          disabled={query.isFetching}
-        >
+        <button type="button" className="gallery__refresh" onClick={() => query.refetch()} disabled={busy}>
           Обновить
+        </button>
+        <button type="button" className="gallery__logout" onClick={onLogout}>
+          Выйти
         </button>
       </header>
 
+      {busy ? (
+        <div className="loading-bar" role="progressbar" aria-label="Загрузка">
+          <span />
+        </div>
+      ) : null}
+
       {query.isError ? (
-        <ErrorState
-          error={query.error}
-          key={String(query.error)}
-          onRetry={() => query.refetch()}
-        />
+        <ErrorState error={query.error} onRetry={() => query.refetch()} />
       ) : query.isLoading ? (
         <div className="grid" aria-busy="true">
           {Array.from({ length: pageSize }).map((_, index) => (
@@ -50,7 +66,7 @@ export function Gallery() {
       ) : query.data && query.data.items.length === 0 ? (
         <div className="state">В альбоме нет фотографий.</div>
       ) : (
-        <div className={`grid${isRefetching ? " grid--refetching" : ""}`}>
+        <div className="grid">
           {query.data?.items.map((photo) => (
             <PhotoCard key={`${photo.ownerId}_${photo.id}`} photo={photo} onOpen={setSelected} />
           ))}
@@ -78,53 +94,28 @@ interface ErrorStateProps {
 }
 
 function ErrorState({ error, onRetry }: ErrorStateProps) {
-  const isNoToken = error instanceof VkApiError && error.code === "NO_TOKEN";
-  const isGroupToken = error instanceof VkApiError && error.code === GROUP_AUTH_ERROR_CODE;
-  const isConfigIssue = isNoToken || isGroupToken;
   const message = error instanceof Error ? error.message : String(error);
-
-  if (isNoToken) {
-    return (
-      <div className="state state--error">
-        <p>Приложение не настроено.</p>
-        <p className="state__detail">
-          Откройте файл <code>config.js</code> рядом с этим приложением и впишите свой
-          <code> accessToken </code> (персональный токен ВКонтакте со scope photos). После этого
-          обновите страницу.
-        </p>
-      </div>
-    );
-  }
+  const code = error instanceof ApiError ? error.code : "";
+  const isGroupToken = code === GROUP_AUTH_ERROR_CODE;
+  const isConfig = code === "NETWORK" || code === "VK_NOT_CONFIGURED";
 
   if (isGroupToken) {
     return (
       <div className="state state--error">
-        <p>Используется токен сообщества (group auth).</p>
+        <p>На сервере используется токен сообщества (group auth).</p>
         <p className="state__detail">
-          Альбом «Сохранённые фото» доступен только через персональный токен пользователя. Как
-          получить такой токен:
+          Альбом «Сохранённые фото» доступен только через персональный user-токен. Обновите{" "}
+          <code>private/secrets.php</code> на сервере:
         </p>
         <ol className="state__steps">
           <li>
-            Создайте <em>standalone</em>-приложение:{" "}
-            <code>https://vk.com/editapp?act=create</code> (тип «Standalone-приложение») и
-            скопируйте его <code>App ID</code>.
+            Создайте <em>standalone</em>-приложение (https://vk.com/editapp?act=create).
           </li>
           <li>
-            Откройте ссылку, подставив свой <code>App ID</code>:
-            <br />
-            <code>
-              https://oauth.vk.com/authorize?client_id=ВАШ_APP_ID&display=page
-              &redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html
-              &scope=photos,offline&response_type=token&v=5.199
-            </code>
+            Получите user-токен со scope <code>photos,offline</code> (URL авторизации — в README).
           </li>
-          <li>Нажмите «Разрешить». В адресной строке после …blank.html# будет access_token=…</li>
-          <li>Скопируйте токен и впишите его в config.js → accessToken. Обновите страницу.</li>
+          <li>Впишите токен в <code>private/secrets.php</code> → <code>vk_token</code>.</li>
         </ol>
-        <p className="state__detail">
-          Токен с правом <code>offline</code> не протухает. Подробнее — в README.
-        </p>
       </div>
     );
   }
@@ -133,7 +124,7 @@ function ErrorState({ error, onRetry }: ErrorStateProps) {
     <div className="state state--error">
       <p>Не удалось загрузить фотографии.</p>
       <p className="state__detail">{message}</p>
-      {!isConfigIssue && (
+      {!isConfig && (
         <button type="button" onClick={onRetry}>
           Повторить
         </button>

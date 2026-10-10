@@ -1,0 +1,8 @@
+# Apache 2.4+
+Require all denied
+
+# Apache 2.2 (если mod_authz_core недоступен)
+<IfModule !mod_authz_core.c>
+  Order deny,allow
+  Deny from all
+</IfModule>

@@ -1,0 +1,355 @@
+<?php
+declare(strict_types=1);
+
+/*
+ * Однофайловый бэкенд: авторизация по логину/паролю, прокси VK API
+ * и серверное кэширование. Лежит рядом с index.html, поэтому работает
+ * в любой поддиректории веб-сервера.
+ *
+ * Секреты (токен VK, пароль) считываются из:
+ *   1) переменных окружения VK_PHOTO_TOKEN / VK_PHOTO_USER / VK_PHOTO_PASSWORD
+ *   2) файла private/secrets.php (см. private/secrets.example.php)
+ */
+
+const ALBUM_ID = 'saved';
+const DEFAULT_API_VERSION = '5.199';
+const CACHE_TTL_SECONDS = 300;
+const MAX_COUNT = 100;
+
+/* ---------------------------------------------------------------- helpers */
+
+function json_out(array $data, int $status = 200): never
+{
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    header('X-Content-Type-Options: nosniff');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+function fail(int $status, string $code, string $message, array $details = []): never
+{
+    json_out(['error' => ['code' => $code, 'message' => $message, 'details' => $details ?: null]], $status);
+}
+
+function request_body(): array
+{
+    $raw = (string) file_get_contents('php://input');
+    if ($raw === '') {
+        return [];
+    }
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
+}
+
+/* ---------------------------------------------------------------- secrets */
+
+function load_secrets(): array
+{
+    $env = function (string $name): ?string {
+        $value = getenv($name);
+        return ($value === false || $value === '') ? null : $value;
+    };
+
+    $file = __DIR__ . '/private/secrets.php';
+    $fromFile = [];
+    if (is_file($file)) {
+        $loaded = include $file;
+        if (is_array($loaded)) {
+            $fromFile = $loaded;
+        }
+    }
+
+    // Окружение имеет приоритет над файлом.
+    if (($token = $env('VK_PHOTO_TOKEN')) !== null) {
+        $fromFile['vk_token'] = $token;
+    }
+    if (($user = $env('VK_PHOTO_USER')) !== null) {
+        $fromFile['username'] = $user;
+    }
+    if (($pass = $env('VK_PHOTO_PASSWORD')) !== null) {
+        $fromFile['password'] = $pass;
+    }
+
+    return $fromFile;
+}
+
+function secrets_ready(array $s): bool
+{
+    $hasAuth = isset($s['username']) && $s['username'] !== '' &&
+        (isset($s['password_hash']) && $s['password_hash'] !== '' || isset($s['password']) && $s['password'] !== '');
+    $hasToken = isset($s['vk_token']) && is_string($s['vk_token']) && $s['vk_token'] !== '';
+    return $hasAuth && $hasToken;
+}
+
+/* ---------------------------------------------------------------- session */
+
+function start_session(): void
+{
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        return;
+    }
+    if (session_name('VKPSESS')) {
+        session_set_cookie_params([
+            'lifetime' => 0,
+            'path'     => '/',
+            'httponly' => true,
+            'samesite' => 'Lax',
+            'secure'   => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'),
+        ]);
+    }
+    session_start();
+}
+
+function require_auth(): void
+{
+    start_session();
+    if (empty($_SESSION['vkphotos_authorized'])) {
+        fail(401, 'UNAUTHORIZED', 'Требуется вход');
+    }
+}
+
+function verify_credentials(array $s, string $username, string $password): bool
+{
+    $expectedUser = (string) ($s['username'] ?? '');
+    if ($username === '' || $expectedUser === '' || $username !== $expectedUser) {
+        return false;
+    }
+    if (isset($s['password_hash']) && $s['password_hash'] !== '') {
+        return password_verify($password, (string) $s['password_hash']);
+    }
+    if (isset($s['password']) && is_string($s['password'])) {
+        return hash_equals($s['password'], $password);
+    }
+    return false;
+}
+
+/* ---------------------------------------------------------------- VK gateway */
+
+function vk_call(array $s, string $method, array $params): array
+{
+    $params['access_token'] = (string) $s['vk_token'];
+    $params['v'] = (string) ($s['api_version'] ?? DEFAULT_API_VERSION);
+
+    $base = rtrim((string) ($s['vk_base'] ?? 'https://api.vk.com/method'), '/');
+    $url = $base . '/' . $method . '?' . http_build_query($params);
+
+    $ctx = stream_context_create([
+        'http' => [
+            'timeout'        => (int) ($s['timeout'] ?? 15),
+            'ignore_errors'  => true,
+            'header'         => "User-Agent: vk-photo-gallery/1.0\r\n",
+        ],
+    ]);
+
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false) {
+        fail(502, 'VK_UNAVAILABLE', 'Не удалось связаться с VK API');
+    }
+    $json = json_decode($body, true);
+    if (!is_array($json)) {
+        fail(502, 'VK_BAD_RESPONSE', 'VK вернул некорректный ответ');
+    }
+    if (isset($json['error'])) {
+        $err = $json['error'];
+        $code = (int) ($err['error_code'] ?? 0);
+        $msg = (string) ($err['error_msg'] ?? 'Unknown VK error');
+        fail(502, 'VK_' . $code, $msg, ['vk_code' => $code]);
+    }
+    return is_array($json['response'] ?? null) ? $json['response'] : [];
+}
+
+/* ---------------------------------------------------------------- mapping */
+
+function pick_size(array $sizes, bool $display): ?array
+{
+    if ($sizes === []) {
+        return null;
+    }
+    $preference = $display ? ['x', 'y', 'z', 'r', 'q', 'p'] : ['m', 's', 'x'];
+    foreach ($preference as $type) {
+        foreach ($sizes as $size) {
+            if (($size['type'] ?? '') === $type && !empty($size['url'])) {
+                return $size;
+            }
+        }
+    }
+    $area = function (array $size): int {
+        return (int) ($size['width'] ?? 0) * (int) ($size['height'] ?? 0);
+    };
+    usort($sizes, fn (array $a, array $b): int => $display
+        ? $area($b) <=> $area($a)
+        : $area($a) <=> $area($b));
+    return !empty($sizes[0]['url']) ? $sizes[0] : null;
+}
+
+function map_photo(array $raw): array
+{
+    $sizes = isset($raw['sizes']) && is_array($raw['sizes']) ? $raw['sizes'] : [];
+    $display = pick_size($sizes, true);
+    $thumb = pick_size($sizes, false);
+
+    return [
+        'id'           => (int) ($raw['id'] ?? 0),
+        'ownerId'      => (int) ($raw['owner_id'] ?? 0),
+        'albumId'      => (int) ($raw['album_id'] ?? 0),
+        'width'        => (int) ($display['width'] ?? $raw['width'] ?? 0),
+        'height'       => (int) ($display['height'] ?? $raw['height'] ?? 0),
+        'text'         => (string) ($raw['text'] ?? ''),
+        'date'         => (int) ($raw['date'] ?? 0),
+        'thumbnailUrl' => $thumb['url'] ?? null,
+        'displayUrl'   => $display['url'] ?? null,
+    ];
+}
+
+/* ---------------------------------------------------------------- cache */
+
+function cache_path(string $key): string
+{
+    return __DIR__ . '/private/cache/' . $key . '.json';
+}
+
+function cache_get(string $key): ?array
+{
+    $path = cache_path($key);
+    if (!is_file($path)) {
+        return null;
+    }
+    if (time() - (int) filemtime($path) > CACHE_TTL_SECONDS) {
+        return null;
+    }
+    $data = json_decode((string) file_get_contents($path), true);
+    return is_array($data) ? $data : null;
+}
+
+function cache_put(string $key, array $data): void
+{
+    $dir = dirname(cache_path($key));
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return; // кэш не критичен — продолжим без него
+    }
+    @file_put_contents(cache_path($key), json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+}
+
+/* ---------------------------------------------------------------- actions */
+
+function action_session(array $s): void
+{
+    start_session();
+    $authorized = !empty($_SESSION['vkphotos_authorized']);
+    json_out([
+        'authorized' => $authorized,
+        'setupRequired' => !secrets_ready($s),
+    ]);
+}
+
+function action_login(array $s): void
+{
+    start_session();
+
+    if (!secrets_ready($s)) {
+        fail(503, 'NOT_CONFIGURED', 'Сервер не настроен: заполните private/secrets.php и впишите токен VK');
+    }
+
+    $body = request_body();
+    $username = is_string($body['username'] ?? null) ? trim($body['username']) : '';
+    $password = is_string($body['password'] ?? null) ? $body['password'] : '';
+
+    // Простой троттлинг подбора пароля.
+    $fails = (int) ($_SESSION['vkphotos_login_fails'] ?? 0);
+    if ($fails >= 5) {
+        fail(429, 'TOO_MANY_ATTEMPTS', 'Слишком много попыток входа. Подождите минуту.');
+    }
+
+    if (!verify_credentials($s, $username, $password)) {
+        $_SESSION['vkphotos_login_fails'] = $fails + 1;
+        usleep(250_000); // 250 мс — сглаживаем разницу по времени
+        fail(401, 'BAD_CREDENTIALS', 'Неверный логин или пароль');
+    }
+
+    unset($_SESSION['vkphotos_login_fails']);
+    $_SESSION['vkphotos_authorized'] = true;
+    session_regenerate_id(true);
+    json_out(['authorized' => true]);
+}
+
+function action_logout(): void
+{
+    start_session();
+    $_SESSION = [];
+    session_destroy();
+    json_out(['authorized' => false]);
+}
+
+function action_photos(array $s): void
+{
+    require_auth();
+
+    if (!isset($s['vk_token']) || (string) $s['vk_token'] === '') {
+        fail(503, 'VK_NOT_CONFIGURED', 'VK-токен не задан на сервере');
+    }
+
+    $offset = filter_var($_GET['offset'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['default' => 0, 'min_range' => 0]]);
+    $count = filter_var($_GET['count'] ?? 30, FILTER_VALIDATE_INT, ['options' => ['default' => 30, 'min_range' => 1, 'max_range' => MAX_COUNT]]);
+    if (!is_int($offset) || !is_int($count)) {
+        fail(400, 'VALIDATION_FAILED', 'offset/count должны быть целыми числами');
+    }
+
+    // Ключ кэша зависит от всего, что влияет на результат.
+    $key = hash('sha256', json_encode(['album' => ALBUM_ID, 'o' => $offset, 'c' => $count]));
+
+    if (($cached = cache_get($key)) !== null) {
+        header('Cache-Control: private, max-age=' . CACHE_TTL_SECONDS);
+        json_out($cached);
+    }
+
+    $ownerId = isset($s['owner_id']) && $s['owner_id'] !== '' ? $s['owner_id'] : null;
+    $response = vk_call($s, 'photos.get', [
+        'album_id'     => ALBUM_ID,
+        'owner_id'     => $ownerId,
+        'offset'       => $offset,
+        'count'        => $count,
+        'photo_sizes'  => 1,
+        'rev'          => 1,
+    ]);
+
+    $items = array_map(map_photo(...), $response['items'] ?? []);
+    $result = [
+        'total'   => (int) ($response['count'] ?? 0),
+        'offset'  => $offset,
+        'count'   => count($items),
+        'hasMore' => $offset + count($items) < (int) ($response['count'] ?? 0),
+        'items'   => $items,
+    ];
+
+    cache_put($key, $result);
+    header('Cache-Control: private, max-age=' . CACHE_TTL_SECONDS);
+    json_out($result);
+}
+
+/* ---------------------------------------------------------------- router */
+
+$secrets = load_secrets();
+$action = $_GET['action'] ?? 'session';
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    json_out([]);
+}
+
+try {
+    switch ($action) {
+        case 'session':
+            action_session($secrets);
+        case 'login':
+            action_login($secrets);
+        case 'logout':
+            action_logout();
+        case 'photos':
+            action_photos($secrets);
+        default:
+            fail(404, 'UNKNOWN_ACTION', 'Неизвестное действие');
+    }
+} catch (Throwable $e) {
+    fail(500, 'INTERNAL', 'Внутренняя ошибка сервера');
+}
