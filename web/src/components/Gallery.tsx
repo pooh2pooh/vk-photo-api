@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Photo } from "../api/types.js";
-import { VkApiError } from "../api/client.js";
+import { VkApiError, GROUP_AUTH_ERROR_CODE } from "../api/client.js";
 import { usePhotos, usePageSize } from "../hooks/usePhotos.js";
 import { Lightbox } from "./Lightbox.js";
 import { Pagination } from "./Pagination.js";
@@ -79,27 +79,64 @@ interface ErrorStateProps {
 
 function ErrorState({ error, onRetry }: ErrorStateProps) {
   const isNoToken = error instanceof VkApiError && error.code === "NO_TOKEN";
+  const isGroupToken = error instanceof VkApiError && error.code === GROUP_AUTH_ERROR_CODE;
+  const isConfigIssue = isNoToken || isGroupToken;
   const message = error instanceof Error ? error.message : String(error);
+
+  if (isNoToken) {
+    return (
+      <div className="state state--error">
+        <p>Приложение не настроено.</p>
+        <p className="state__detail">
+          Откройте файл <code>config.js</code> рядом с этим приложением и впишите свой
+          <code> accessToken </code> (персональный токен ВКонтакте со scope photos). После этого
+          обновите страницу.
+        </p>
+      </div>
+    );
+  }
+
+  if (isGroupToken) {
+    return (
+      <div className="state state--error">
+        <p>Используется токен сообщества (group auth).</p>
+        <p className="state__detail">
+          Альбом «Сохранённые фото» доступен только через персональный токен пользователя. Как
+          получить такой токен:
+        </p>
+        <ol className="state__steps">
+          <li>
+            Создайте <em>standalone</em>-приложение:{" "}
+            <code>https://vk.com/editapp?act=create</code> (тип «Standalone-приложение») и
+            скопируйте его <code>App ID</code>.
+          </li>
+          <li>
+            Откройте ссылку, подставив свой <code>App ID</code>:
+            <br />
+            <code>
+              https://oauth.vk.com/authorize?client_id=ВАШ_APP_ID&display=page
+              &redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html
+              &scope=photos,offline&response_type=token&v=5.199
+            </code>
+          </li>
+          <li>Нажмите «Разрешить». В адресной строке после …blank.html# будет access_token=…</li>
+          <li>Скопируйте токен и впишите его в config.js → accessToken. Обновите страницу.</li>
+        </ol>
+        <p className="state__detail">
+          Токен с правом <code>offline</code> не протухает. Подробнее — в README.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="state state--error">
-      {isNoToken ? (
-        <>
-          <p>Приложение не настроено.</p>
-          <p className="state__detail">
-            Откройте файл <code>config.js</code> рядом с этим приложением и впишите свой
-            <code> accessToken </code> (токен ВКонтакте со scope photos). После этого обновите
-            страницу.
-          </p>
-        </>
-      ) : (
-        <>
-          <p>Не удалось загрузить фотографии.</p>
-          <p className="state__detail">{message}</p>
-          <button type="button" onClick={onRetry}>
-            Повторить
-          </button>
-        </>
+      <p>Не удалось загрузить фотографии.</p>
+      <p className="state__detail">{message}</p>
+      {!isConfigIssue && (
+        <button type="button" onClick={onRetry}>
+          Повторить
+        </button>
       )}
     </div>
   );

@@ -38,6 +38,8 @@ export function describeVkError(errorCode: number, fallback: string): string {
       return "Слишком много запросов к VK, попробуйте позже";
     case 14:
       return "VK требует капчу — попробуйте позже";
+    case 27:
+      return "Токен принадлежит сообществу, а не пользователю (group auth). Для альбома «Сохранённые фото» нужен персональный user-токен.";
     case 100:
       return "VK: неверные параметры запроса";
     case 200:
@@ -47,6 +49,8 @@ export function describeVkError(errorCode: number, fallback: string): string {
       return fallback || `Ошибка VK (код ${errorCode})`;
   }
 }
+
+export const GROUP_AUTH_ERROR_CODE = "VK_27";
 
 export class VkApiError extends Error {
   constructor(

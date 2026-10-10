@@ -163,6 +163,23 @@ button:disabled {
   font-size: 0.85em;
 }
 
+.state__steps {
+  max-width: 720px;
+  margin: 12px auto;
+  padding-left: 20px;
+  text-align: left;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.state__steps li {
+  margin-bottom: 8px;
+}
+
+.state__steps code {
+  overflow-wrap: anywhere;
+}
+
 .lightbox {
   position: fixed;
   inset: 0;

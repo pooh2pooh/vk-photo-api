@@ -1,5 +1,5 @@
 import type { PhotosPage } from "./types.js";
-import { fetchPhotosPage, VkApiError } from "./vkClient.js";
+import { fetchPhotosPage, VkApiError, GROUP_AUTH_ERROR_CODE } from "./vkClient.js";
 
 export interface FetchPhotosParams {
   offset: number;
@@ -18,4 +18,4 @@ export async function fetchPhotos(params: FetchPhotosParams): Promise<PhotosPage
   return result;
 }
 
-export { VkApiError };
+export { VkApiError, GROUP_AUTH_ERROR_CODE };

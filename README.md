@@ -17,7 +17,7 @@
 
    ```js
    window.VK_CONFIG = {
-     accessToken: "ваш_токен", // scope photos
+     accessToken: "ваш_токен", // персональный user-токен, scope photos
      albumId: "saved",         // «Сохранённые фото»
      ownerId: "",              // пусто = владелец токена
      pageSize: 30
@@ -25,6 +25,24 @@
    ```
 
 4. Открой `http://<host>/vkphotos/` — галерея работает.
+
+### Получение персонального токена
+
+Альбом «Сохранённые фото» — личный, поэтому **токен сообщества не подойдёт**
+(ошибка `Group authorization failed`). Нужен персональный (user) токен:
+
+1. Создай standalone-приложение: https://vk.com/editapp?act=create
+2. Скопируй его `App ID`.
+3. Открой (подставив свой `App ID`):
+
+   ```
+   https://oauth.vk.com/authorize?client_id=ВАШ_APP_ID&display=page&redirect_uri=https%3A%2F%2Foauth.vk.com%2Fblank.html&scope=photos,offline&response_type=token&v=5.199
+   ```
+
+4. Нажми «Разрешить». В адресной строке (после `…blank.html#`) появится `access_token=…`.
+5. Скопируй токен в `config.js` → `accessToken`.
+
+Право `offline` делает токен бессрочным.
 
 Приложение полностью статическое: обращается к VK API напрямую через JSONP (VK не отдаёт CORS
 для `fetch`), относительные пути заданы так, что неважно, в какую поддиректорию положить сборку.
