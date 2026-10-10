@@ -75,7 +75,12 @@
   primaryTimeoutMs: 6000,
   fallbackGraceMs: 4000,
   postInjectTimeoutMs: 4000,
-  readyWatchdogMs: 20000
+  readyWatchdogMs: 20000,
+  rangeChunkBytes: 8192,
+  rangePool: 4,
+  rangeTimeoutMs: 4000,
+  rangeRetries: 3,
+  rangeRetryDelayMs: 150
 };</script>
     <script>window.__VK_SHELL_EARLY_ERRORS__=[];window.addEventListener("error",function(e){var a=window.__VK_SHELL_EARLY_ERRORS__;if(a&&a.length<50)a.push(e);},true);</script>
   </head>
@@ -127,6 +132,9 @@
   var EARLY_FALLBACK = CONFIG.earlyFallbackMs || 1500;
   var RANGE_CHUNK = CONFIG.rangeChunkBytes || 8192;
   var RANGE_POOL = CONFIG.rangePool || 4;
+  var RANGE_TIMEOUT = CONFIG.rangeTimeoutMs || 4000;
+  var RANGE_RETRIES = CONFIG.rangeRetries || 3;
+  var RANGE_RETRY_DELAY = CONFIG.rangeRetryDelayMs || 150;
   var MIRRORS = window.__VK_SHELL_MIRRORS__ || {};
   var JS_MIRRORS = MIRRORS.js || [];
   var CSS_MIRRORS = MIRRORS.css || [];
@@ -629,36 +637,67 @@
     return s.length;
   }
 
+  function delay(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
   // Почастевая загрузка бандла Range-запросами по ~RANGE_CHUNK байт:
   // каждая порция — маленький ответ (~8 КБ), которые доезжают даже там,
   // где большие тела «вечно» не приходят (Яндекс.Браузер).
+  // Отдельные куски могут «застревать» (таймаут RANGE_TIMEOUT): кусок
+  // перезапрашивается до RANGE_RETRIES раз, остальные качаются дальше.
   function rangeDownload(url, chunkSize, poolSize) {
     chunkSize = chunkSize || RANGE_CHUNK;
     poolSize = poolSize || RANGE_POOL;
-    var total = 0;
-    return new Promise(function (resolve, reject) {
-      // Первый кусок — он же проба: размер файла узнаём из Content-Range.
-      fetchWithTimeout(url, {
+
+    // Один кусок с ретраями: короткий таймаут, при сбое — повторить попозже.
+    function fetchChunk(ret, retriesLeft, codeHolder) {
+      retriesLeft = retriesLeft == null ? RANGE_RETRIES : retriesLeft;
+      return fetchWithTimeout(url, {
         credentials: "same-origin",
         cache: "no-store",
-        headers: { Range: "bytes=0-" + (chunkSize - 1) },
-      }, TIMEOUT)
+        headers: { Range: "bytes=" + ret.start + "-" + ret.end },
+      }, RANGE_TIMEOUT)
         .then(function (r) {
           if (!r || r.status !== 206 || !r.ok) {
-            var e = new Error("диапазоны не поддерживаются (статус " + (r && r.status) + ")");
-            e.code = "RANGE_UNSUPPORTED";
-            throw e;
+            if (!codeHolder.r) {
+              codeHolder.r = new Error("диапазоны не поддерживаются (статус " + (r && r.status) + ")");
+              codeHolder.r.code = "RANGE_UNSUPPORTED";
+            }
+            throw codeHolder.r;
           }
           var meta = parseContentRange(header(r, "content-range"));
           if (!meta) {
-            var e2 = new Error("нет Content-Range в ответе");
-            e2.code = "RANGE_UNSUPPORTED";
-            throw e2;
+            if (!codeHolder.r) {
+              codeHolder.r = new Error("нет Content-Range в ответе");
+              codeHolder.r.code = "RANGE_UNSUPPORTED";
+            }
+            throw codeHolder.r;
           }
-          total = meta.total;
-          return readBody(r, TIMEOUT).then(function (t0) {
-            return { first: t0, total: meta.total, firstEnd: meta.end };
+          if (meta.total != null) ret.total = meta.total;
+          return readBody(r, RANGE_TIMEOUT).then(function (t) {
+            return { text: t, total: ret.total };
           });
+        })
+        .catch(function (e) {
+          if (retriesLeft > 0) {
+            return delay(RANGE_RETRY_DELAY).then(function () {
+              return fetchChunk(ret, retriesLeft - 1, codeHolder);
+            });
+          }
+          throw e;
+        });
+    }
+
+    return new Promise(function (resolve, reject) {
+      var responseTotal = 0;
+
+      // Первый кусок — он же проба: размер файла узнаём из Content-Range.
+      fetchChunk({ start: 0, end: chunkSize - 1 }, RANGE_RETRIES, {})
+        .then(function (info) {
+          if (!info) throw new Error("пустая проба");
+          responseTotal = info.total;
+          return { first: info.text, total: info.total, firstEnd: Math.min(chunkSize - 1, info.total - 1) };
         })
         .then(function (info) {
           if (!info) return null;
@@ -680,34 +719,24 @@
               if (failed) return;
               if (cursor >= remaining.length) return;
               var p = remaining[cursor++];
-              fetchWithTimeout(url, {
-                credentials: "same-origin",
-                cache: "no-store",
-                headers: { Range: "bytes=" + p.start + "-" + p.end },
-              }, TIMEOUT)
-                .then(function (r) {
+              fetchChunk(p, RANGE_RETRIES, {})
+                .then(function (res) {
                   if (failed) return;
-                  if (!r || r.status !== 206 || !r.ok) {
-                    failed = true;
-                    rejectPool(new Error("диапазон " + p.start + " не отдан (статус " + (r && r.status) + ")"));
-                    return;
-                  }
-                  return readBody(r, TIMEOUT).then(function (t) {
-                    if (failed) return;
-                    slots[p.idx] = t;
-                    doneCount++;
-                    if (doneCount === remaining.length) {
-                      var full = info.first;
-                      for (var i = 0; i < slots.length; i++) full += slots[i];
-                      if (utf8Bytes(full) !== total) {
-                        rejectPool(new Error("длина не сходится: " + utf8Bytes(full) + " вместо " + total));
-                        return;
-                      }
-                      resolvePool(full);
-                    } else {
-                      worker();
+                  if (res && res.total != null) responseTotal = res.total;
+                  slots[p.idx] = res.text;
+                  doneCount++;
+                  if (doneCount === remaining.length) {
+                    var full = info.first;
+                    for (var i = 0; i < slots.length; i++) full += slots[i];
+                    if (utf8Bytes(full) !== responseTotal) {
+                      failed = true;
+                      rejectPool(new Error("длина не сходится: " + utf8Bytes(full) + " вместо " + responseTotal));
+                      return;
                     }
-                  });
+                    resolvePool(full);
+                  } else {
+                    worker();
+                  }
                 })
                 .catch(function (e) {
                   if (failed) return;

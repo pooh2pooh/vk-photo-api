@@ -62,7 +62,12 @@ const configInline = `window.__VK_SHELL_CONFIG__ = {
   primaryTimeoutMs: 6000,
   fallbackGraceMs: 4000,
   postInjectTimeoutMs: 4000,
-  readyWatchdogMs: 20000
+  readyWatchdogMs: 20000,
+  rangeChunkBytes: 8192,
+  rangePool: 4,
+  rangeTimeoutMs: 4000,
+  rangeRetries: 3,
+  rangeRetryDelayMs: 150
 };`;
 
 // Фавиконки/иконки кладём в корень (см. scripts/make-icons.sh), ссылки даём
