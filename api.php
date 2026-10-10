@@ -180,6 +180,40 @@ function vk_error_message(int $code): string
     };
 }
 
+/*
+ * VK ограничивает частоту обращений: для user-токена — не чаще 3 запросов в
+ * секунду (иначе ошибка 6), плюс есть суточные лимиты на однотипные методы
+ * (ошибки 14/29). Держим глобальный интервал ≈340 мс между вызовами VK, чтобы
+ * даже параллельные запросы (несколько вкладок, быстрая пагинация) не упирались
+ * в лимит. Синхронизируем через файл-замок — работает без APC/opcache.
+ */
+function vk_throttle(): void
+{
+    $minIntervalUs = 340_000; // ≈2.9 запроса в секунду
+    $dir = __DIR__ . '/private/cache';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return; // кэш недоступен — не блокируем работу
+    }
+    $fh = @fopen($dir . '/vk-throttle.lock', 'c+');
+    if ($fh === false) {
+        return;
+    }
+    if (flock($fh, LOCK_EX)) {
+        $raw = stream_get_contents($fh);
+        $last = (int) trim($raw === false ? '' : $raw);
+        $waitUs = $last + $minIntervalUs - (int) round(microtime(true) * 1_000_000);
+        if ($waitUs > 0) {
+            usleep($waitUs);
+        }
+        ftruncate($fh, 0);
+        rewind($fh);
+        fwrite($fh, (string) (int) round(microtime(true) * 1_000_000));
+        fflush($fh);
+        flock($fh, LOCK_UN);
+    }
+    fclose($fh);
+}
+
 function vk_call(array $s, string $method, array $params, int $attempt = 0): array
 {
     $params['access_token'] = (string) $s['vk_token'];
@@ -196,6 +230,7 @@ function vk_call(array $s, string $method, array $params, int $attempt = 0): arr
         ],
     ]);
 
+    vk_throttle();
     $body = @file_get_contents($url, false, $ctx);
     if ($body === false) {
         // Иногда VK/сеть просто моргают — даём пару попыток.

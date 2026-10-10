@@ -659,32 +659,60 @@ button {
 }
 
 .lightbox__thumbs {
+  --thumb-size: 54px;
+  --thumb-gap: 6px;
+  --thumb-step: calc(var(--thumb-size) + var(--thumb-gap));
+  --thumb-fade: 84px;
   align-self: center;
-  display: flex;
-  gap: 6px;
-  width: fit-content;
-  max-width: 100%;
-  padding: 6px;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
-  scroll-behavior: smooth;
+  position: relative;
+  width: min(100%, 680px);
+  height: calc(var(--thumb-size) + 16px);
+  padding: 6px 0;
+  overflow: hidden;
   background: rgba(24, 27, 34, 0.6);
   border: 1px solid var(--border);
   border-radius: 12px;
+  /* Крайние миниатюры «затухают» — создаёт эффект бесконечной ленты. */
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 var(--thumb-fade),
+    #000 calc(100% - var(--thumb-fade)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 var(--thumb-fade),
+    #000 calc(100% - var(--thumb-fade)),
+    transparent 100%
+  );
+}
+
+/* Один непрерывный трек: сдвигаем его так, чтобы активная миниатюра была
+   строго по центру. Число элементов постоянно, движение — плавное. */
+.lightbox__track {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  display: flex;
+  gap: var(--thumb-gap);
+  will-change: transform;
+  transform: translateX(calc(-1 * (var(--i) * var(--thumb-step) + var(--thumb-size) / 2)));
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .lightbox__thumb {
   flex: 0 0 auto;
-  width: 54px;
-  height: 54px;
+  width: var(--thumb-size);
+  height: var(--thumb-size);
   padding: 0;
   border: 2px solid transparent;
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface);
-  opacity: 0.55;
-  transition: opacity 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  opacity: 0.5;
+  transition: opacity 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
 }
 
 .lightbox__thumb img {
@@ -760,9 +788,9 @@ button {
     right: 2px;
   }
 
-  .lightbox__thumb {
-    width: 46px;
-    height: 46px;
+  .lightbox__thumbs {
+    --thumb-size: 46px;
+    --thumb-fade: 60px;
   }
 }
 

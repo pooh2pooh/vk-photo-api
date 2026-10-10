@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { Photo } from "../api/types.js";
 
 interface LightboxProps {
@@ -10,8 +11,6 @@ interface LightboxProps {
 
 /** Мини-пауза между переключениями — чтобы колесо/стрелки не «пролистывали» пачками. */
 const NAV_COOLDOWN_MS = 220;
-/** Сколько соседних миниатюр показывать с каждой стороны. */
-const THUMB_WINDOW = 12;
 /** Задержка перед показом спиннера — чтобы он не мигал на закэшированных фото. */
 const SPINNER_DELAY_MS = 140;
 
@@ -25,7 +24,6 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
   const rootRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const thumbsRef = useRef<HTMLDivElement>(null);
-  const activeThumbRef = useRef<HTMLButtonElement>(null);
 
   // Переключение с защитой от слишком частого срабатывания.
   const go = useCallback(
@@ -120,17 +118,6 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
     };
   }, []);
 
-  // Активную миниатюру держим в видимой части ленты.
-  useEffect(() => {
-    activeThumbRef.current?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
-  }, [index]);
-
-  const windowStart = Math.max(0, index - THUMB_WINDOW);
-  const visible = useMemo(
-    () => photos.slice(Math.max(0, index - THUMB_WINDOW), Math.min(photos.length, index + THUMB_WINDOW + 1)),
-    [photos, index],
-  );
-
   if (!photo) return null;
   const src = photo.displayUrl ?? photo.thumbnailUrl;
 
@@ -189,23 +176,26 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
         </div>
 
         <div className="lightbox__thumbs" ref={thumbsRef}>
-          {visible.map((item, offset) => {
-            const absolute = windowStart + offset;
-            const isActive = absolute === index;
-            return (
-              <button
-                key={`${item.ownerId}_${item.id}`}
-                type="button"
-                ref={isActive ? activeThumbRef : undefined}
-                className={isActive ? "lightbox__thumb is-active" : "lightbox__thumb"}
-                onClick={() => onIndexChange(absolute)}
-                aria-label={`Фото ${absolute + 1}`}
-                aria-current={isActive ? "true" : undefined}
-              >
-                <img src={item.thumbnailUrl ?? item.displayUrl} alt="" loading="lazy" decoding="async" />
-              </button>
-            );
-          })}
+          {/* Вся лента рендерится одним треком и сдвигается трансформом, так что
+              число элементов не меняется и активная миниатюра всегда по центру —
+              лента не «дёргается». Края затухают маской (эффект бесконечности). */}
+          <div className="lightbox__track" style={{ "--i": index } as CSSProperties}>
+            {photos.map((item, absolute) => {
+              const isActive = absolute === index;
+              return (
+                <button
+                  key={`${item.ownerId}_${item.id}`}
+                  type="button"
+                  className={isActive ? "lightbox__thumb is-active" : "lightbox__thumb"}
+                  onClick={() => onIndexChange(absolute)}
+                  aria-label={`Фото ${absolute + 1}`}
+                  aria-current={isActive ? "true" : undefined}
+                >
+                  <img src={item.thumbnailUrl ?? item.displayUrl} alt="" loading="lazy" decoding="async" />
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
