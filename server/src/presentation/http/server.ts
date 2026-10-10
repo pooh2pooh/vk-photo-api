@@ -35,7 +35,6 @@ function serializeError(error: unknown): { statusCode: number; body: Record<stri
 export function buildServer(options: BuildServerOptions): FastifyInstance {
   const app = Fastify({
     logger: options.logger ?? true,
-    disableRequestLogging: false,
   });
 
   app.register(cors, { origin: options.corsOrigin ?? true });

@@ -1,8 +1,19 @@
 import { config as loadDotenv } from "dotenv";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { z } from "zod";
 import { AppError } from "../domain/errors.js";
 
-loadDotenv();
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(moduleDir, "..", "..", "..");
+
+loadDotenv({
+  path: [
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(repoRoot, ".env"),
+    path.resolve(repoRoot, ".env.local"),
+  ],
+});
 
 const optionalInt = (fallback: number) =>
   z
