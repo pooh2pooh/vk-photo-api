@@ -43,9 +43,20 @@ const title = titleMatch ? titleMatch[1] : "Фото ВК";
 
 const runtime = readFileSync(path.join(webDir, "shell-runtime.js"), "utf8");
 
+// Бандл встраиваем прямо в HTML: в Яндекс.Браузере отдельный запрос к
+// ./assets/app-*.js может «зависать» навсегда (ни load, ни error), а разметка
+// index.html при этом грузится нормально. Инлайн убирает этот запрос целиком.
+// Комментарий sourceMappingURL вырезаем (в инлайне относительный путь к .map
+// резолвится от index.html и даёт 404), последовательность </script> экранируем.
+const jsCode = readFileSync(path.join(assetsDir, jsName), "utf8");
+const jsInline = jsCode
+  .replace(/\/\/# sourceMappingURL=.*$/m, "")
+  .replace(/<\/script/gi, "<\\/script");
+
 const configInline = `window.__VK_SHELL_CONFIG__ = {
   js: "./assets/${jsName}",
   css: "./assets/${cssName}",
+  jsInline: true,
   timeoutMs: 8000,
   primaryTimeoutMs: 6000,
   fallbackGraceMs: 4000,
@@ -135,9 +146,7 @@ const shellHtml = `<!doctype html>
     <noscript>Для работы интерфейса нужен включённый JavaScript.</noscript>
     <script src="./shell-config.js"></script>
     <script>${runtime}</script>
-    <script id="app-bundle" src="./assets/${jsName}"
-      onload="window.__VK_SHELL_SCRIPT_LOADED__=true;window.__VK_LOADER__&&window.__VK_LOADER__.ok('Событие load у бандла')"
-      onerror="window.__VK_SHELL_SCRIPT_ERRORED__=true;window.__VK_LOADER__&&window.__VK_LOADER__.error('Событие error у бандла')"></script>
+    <script id="app-bundle" data-source="inline">${jsInline}</script>
   </body>
 </html>
 `;

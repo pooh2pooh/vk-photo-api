@@ -18,6 +18,10 @@
   var CONFIG = window.__VK_SHELL_CONFIG__ || {};
   var JS = CONFIG.js || "./assets/app.js";
   var CSS = CONFIG.css || "./assets/app.css";
+  // jsInline: бандл уже встроен в HTML (см. scripts/build-shell.mjs). Тогда
+  // внешний запрос не нужен и не делается — это обходит браузеры/прокси,
+  // которые «вешают» загрузку отдельного файла .js.
+  var JS_INLINE = !!CONFIG.jsInline;
   var TIMEOUT = CONFIG.timeoutMs || 8000;
   var PRIMARY_TIMEOUT = CONFIG.primaryTimeoutMs || 6000;
   var FALLBACK_GRACE = CONFIG.fallbackGraceMs || 4000;
@@ -309,7 +313,7 @@
     if (cachedPrimary) return;
     cachedPrimary = true;
     write("info", "Кэширование бандла для офлайна");
-    cacheText("js", JS);
+    if (!JS_INLINE) cacheText("js", JS);
     cacheText("css", CSS);
   }
 
@@ -394,18 +398,64 @@
     return l;
   }
 
+  // fetch с жёстким таймаутом: если запрос «висит», мы это увидим в логе,
+  // а не будем ждать бесконечно.
+  function fetchWithTimeout(url, opts, ms) {
+    return new Promise(function (resolve, reject) {
+      var ctrl = null;
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        try { if (ctrl) ctrl.abort(); } catch (e) {}
+        reject(new Error("таймаут " + ms + "мс"));
+      }, ms);
+      try {
+        if (typeof AbortController === "function") {
+          ctrl = new AbortController();
+          opts.signal = ctrl.signal;
+        }
+      } catch (e) {}
+      fetch(url, opts).then(
+        function (r) { if (!done) { done = true; clearTimeout(timer); resolve(r); } },
+        function (e) { if (!done) { done = true; clearTimeout(timer); reject(e); } },
+      );
+    });
+  }
+
+  function headerSummary(r) {
+    if (!r || !r.headers || !r.headers.get) return "";
+    var parts = [];
+    var keys = ["content-type", "content-length", "content-encoding", "transfer-encoding"];
+    for (var i = 0; i < keys.length; i++) {
+      var v = null;
+      try { v = r.headers.get(keys[i]); } catch (e) {}
+      if (v) parts.push(keys[i] + "=" + v);
+    }
+    return parts.join(" ");
+  }
+
+  function withCacheBuster(url) {
+    return url + (url.indexOf("?") === -1 ? "?" : "&") + "shellcb=" + Date.now();
+  }
+
   // Последний резерв: забрать бандл через fetch и выполнить инлайн.
   // Работает, когда статический <script> блокируется молча (без load/error).
   function runLocalFetchThenStub() {
     if (typeof fetch !== "function") { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
-    write("net", "Резервный fetch " + JS);
+
+    // HEAD-проба: проверяет, отвечает ли сервер вообще (без тела).
+    fetchWithTimeout(JS, { method: "HEAD", credentials: "same-origin", cache: "no-store" }, TIMEOUT)
+      .then(function (r) { write("ok", "HEAD " + JS + " → " + r.status + " " + headerSummary(r)); })
+      .catch(function (e) { write("warn", "HEAD не удался (сервер не отвечает): " + (e && e.message)); });
+
+    var url = withCacheBuster(JS);
+    write("net", "Резервный fetch " + url);
     var started = now();
-    fetch(JS, { credentials: "same-origin" })
+    fetchWithTimeout(url, { credentials: "same-origin", cache: "no-store" }, TIMEOUT)
       .then(function (r) {
         var ms = Math.round(now() - started);
-        var ct = "";
-        try { ct = r.headers && r.headers.get ? r.headers.get("content-type") || "" : ""; } catch (e) {}
-        write(r.ok ? "ok" : "error", "fetch " + JS + " → " + r.status + " " + ct + " " + ms + "мс");
+        write(r.ok ? "ok" : "error", "GET " + JS + " → " + r.status + " " + headerSummary(r) + " " + ms + "мс");
         if (!r.ok) return null;
         return r.text();
       })
@@ -579,6 +629,15 @@
     if (window.__APP_READY__) { markReady(); return; }
 
     startReadyPoll();
+
+    if (JS_INLINE) {
+      // Основной код уже в HTML: ждать загрузку внешнего файла нечего.
+      write("info", "Бандл встроен в HTML (внешний запрос не требуется)");
+      finalTimer = setTimeout(function () {
+        if (!window.__APP_READY__) showFallback("APP_TIMEOUT");
+      }, READY_WATCHDOG);
+      return;
+    }
 
     // Ранний детектор «тихой» блокировки: если у тега бандла не было ни load,
     // ни error за EARLY_FALLBACK мс — считаем ресурс заблокированным и сразу

@@ -1,0 +1,22 @@
+# Настройки отдачи статики, повышающие совместимость с прокси/браузерами
+# (в частности с Яндекс.Браузером и его режимом «Турбо»).
+#
+# Проблема: большие JS-бандлы могут «зависать» при загрузке, если ответ
+# сжимается или транслируется промежуточным прокси. Отключаем трансформацию
+# и сжатие для скриптов/стилей, чтобы ответ отдавался байт-в-байт.
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(?:js|mjs|css)$">
+    Header set Cache-Control "no-transform"
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_deflate.c>
+  <FilesMatch "\.(?:js|mjs|css)$">
+    SetEnv no-gzip 1
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_brotli.c>
+  SetEnvIfNoCase Request_URI \.(?:js|mjs|css)(\?.*)?$ no-brotli
+</IfModule>
