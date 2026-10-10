@@ -1,0 +1,56 @@
+{
+    "reason": "ready",
+    "version": "2",
+    "href": "http://127.0.0.1:8090/index.html",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0) YaBrowser/24.7 Chrome/126.0 Safari/537.36",
+    "ready": true,
+    "mounted": true,
+    "config": {
+        "js": "./assets/app-Bw4c7E5-.js",
+        "css": "./assets/app-Dt0Dl7z8.css",
+        "asset": "./api.php?action=asset"
+    },
+    "log": [
+        "[  1ms] Загрузчик v2 запущен",
+        "[ 96ms] Основной бандл: ./assets/app-Bw4c7E5-.js",
+        "[105ms] Яндекс.Браузер: бандл есть в localStorage, Range не нужен",
+        "[127ms] → GET session",
+        "[129ms] Интерфейс готов",
+        "[130ms] Кэширование бандла для офлайна"
+    ],
+    "resourceTiming": [
+        {
+            "name": "http://127.0.0.1:8090/assets/app-Dt0Dl7z8.css",
+            "initiatorType": "link",
+            "duration": 12,
+            "transferSize": 7634,
+            "encodedBodySize": 7334,
+            "decodedBodySize": 7334,
+            "responseStatus": 200
+        },
+        {
+            "name": "http://127.0.0.1:8090/shell-config.js",
+            "initiatorType": "script",
+            "duration": 13,
+            "transferSize": 2226,
+            "encodedBodySize": 1926,
+            "decodedBodySize": 1926,
+            "responseStatus": 200
+        }
+    ],
+    "navigation": {
+        "type": "navigate",
+        "duration": 0,
+        "transferSize": 47335,
+        "encodedBodySize": 47035,
+        "decodedBodySize": 47035,
+        "domContentLoaded": 0
+    },
+    "_server": {
+        "time": "2026-10-10T21:01:40+00:00",
+        "ip": "127.0.0.1",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0) YaBrowser/24.7 Chrome/126.0 Safari/537.36",
+        "accept_encoding": "gzip, deflate, br, zstd",
+        "http_version": "HTTP/1.1"
+    }
+}

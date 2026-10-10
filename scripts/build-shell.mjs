@@ -64,10 +64,10 @@ const configInline = `window.__VK_SHELL_CONFIG__ = {
   postInjectTimeoutMs: 4000,
   readyWatchdogMs: 20000,
   rangeChunkBytes: 8192,
-  rangePool: 6,
-  rangeTimeoutMs: 3500,
-  rangeRetries: 5,
-  rangeRetryDelayMs: 150
+  rangePool: 4,
+  rangeTimeoutMs: 1500,
+  rangeRetries: 6,
+  rangeRetryDelayMs: 120
 };`;
 
 // Фавиконки/иконки кладём в корень (см. scripts/make-icons.sh), ссылки даём

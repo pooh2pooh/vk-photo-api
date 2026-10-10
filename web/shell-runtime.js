@@ -31,10 +31,10 @@
   var POST_INJECT_TIMEOUT = CONFIG.postInjectTimeoutMs || 4000;
   var EARLY_FALLBACK = CONFIG.earlyFallbackMs || 1500;
   var RANGE_CHUNK = CONFIG.rangeChunkBytes || 8192;
-  var RANGE_POOL = CONFIG.rangePool || 6;
-  var RANGE_TIMEOUT = CONFIG.rangeTimeoutMs || 3500;
-  var RANGE_RETRIES = CONFIG.rangeRetries || 5;
-  var RANGE_RETRY_DELAY = CONFIG.rangeRetryDelayMs || 150;
+  var RANGE_POOL = CONFIG.rangePool || 4;
+  var RANGE_TIMEOUT = CONFIG.rangeTimeoutMs || 1500;
+  var RANGE_RETRIES = CONFIG.rangeRetries || 6;
+  var RANGE_RETRY_DELAY = CONFIG.rangeRetryDelayMs || 120;
   var MIRRORS = window.__VK_SHELL_MIRRORS__ || {};
   var JS_MIRRORS = MIRRORS.js || [];
   var CSS_MIRRORS = MIRRORS.css || [];
@@ -376,8 +376,18 @@
     if (cachedPrimary) return;
     cachedPrimary = true;
     write("info", "Кэширование бандла для офлайна");
-    if (!JS_INLINE) cacheText("js", JS);
+    if (!JS_INLINE && !lsGet(JS_KEY)) cacheText("js", JS);
     cacheText("css", CSS);
+  }
+
+  // Сохраняем уже собранный (например, из Range-кусков) бандл — тогда
+  // следующий заход в Яндекс.Браузере возьмёт его из localStorage мгновенно.
+  function storeBundle(text) {
+    try {
+      if (!text || text.length < 600 || /^\s*</.test(text)) return;
+      lsSet(JS_KEY, text);
+      evictOld("vk_shell_js_", JS_KEY);
+    } catch (e) {}
   }
 
   /* ---- резервные источники ---- */
@@ -567,8 +577,12 @@
     poolSize = poolSize || RANGE_POOL;
 
     // Один запрос куска: короткий таймаут RANGE_TIMEOUT, raw-байты из Range.
+    // Повторную попытку шлём на URL с меткой — чтобы прокси/кэш не отдал
+    // тот же «зависший» ответ.
     function fetchChunkOnce(ret, codeHolder) {
-      return fetchWithTimeout(url, {
+      ret.attempt = (ret.attempt || 0) + 1;
+      var chunkUrl = ret.attempt > 1 ? withCacheBuster(url) : url;
+      return fetchWithTimeout(chunkUrl, {
         credentials: "same-origin",
         cache: "no-store",
         headers: { Range: "bytes=" + ret.start + "-" + ret.end },
@@ -705,6 +719,7 @@
         write("info", "Диапазоны: собрано " + text.length + " байт");
         if (/^\s*</.test(text)) throw new Error("ответ похож на HTML, а не на JS");
         write("warn", "Выполняю бандл диапазонов инлайн");
+        storeBundle(text);
         injectJsFromText(text, "ranges");
         var deadline = now() + POST_INJECT_TIMEOUT;
         (function check() {
@@ -726,9 +741,9 @@
     var sources = [];
     if (JS_ASSET) sources.push(JS_ASSET);
     if (JS && (!JS_ASSET || JS !== JS_ASSET)) sources.push(JS);
-    write("warn", "Яндекс.Браузер: заряжаю бандл Range-кусками вместо целого тела");
     rangeActive = true;
     armRangeWatchdog();
+
     var srcIndex = 0;
     function tryNext() {
       if (window.__APP_READY__) { markReady(); return; }
@@ -736,6 +751,27 @@
       armRangeWatchdog();
       rangeDownloadThenRun(sources[srcIndex++], tryNext);
     }
+
+    // Сначала — уже скачанный ранее бандл: повторные заходы мгновенны,
+    // Range-качаем только когда кэша нет или он не запустился.
+    var cached = lsGet(JS_KEY);
+    if (cached) {
+      write("warn", "Яндекс.Браузер: бандл есть в localStorage, Range не нужен");
+      injectJsFromText(cached, "localStorage");
+      var deadline = now() + POST_INJECT_TIMEOUT;
+      (function check() {
+        if (window.__APP_READY__) { markReady(); return; }
+        if (now() >= deadline) {
+          write("warn", "Кэш не запустился, качаю бандл Range-кусками");
+          tryNext();
+          return;
+        }
+        setTimeout(check, 100);
+      })();
+      return;
+    }
+
+    write("warn", "Яндекс.Браузер: заряжаю бандл Range-кусками вместо целого тела");
     tryNext();
   }
 
