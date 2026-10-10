@@ -13,8 +13,14 @@ createRoot(container).render(
 );
 
 // Сигнал отказоустойчивому загрузчику: приложение поднялось.
-window.requestAnimationFrame(() => {
+function signalReady() {
   window.__APP_READY__ = true;
   document.body.classList.remove("shell-busy");
   document.getElementById("shell-boot")?.remove();
-});
+}
+
+if (typeof window.requestAnimationFrame === "function") {
+  window.requestAnimationFrame(signalReady);
+} else {
+  window.setTimeout(signalReady, 0);
+}

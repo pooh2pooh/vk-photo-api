@@ -15,6 +15,7 @@
   var CSS = CONFIG.css || "./assets/index.css";
   var TIMEOUT = CONFIG.timeoutMs || 8000;
   var READY_WATCHDOG = CONFIG.readyWatchdogMs || 12000;
+  var FALLBACK_GRACE = CONFIG.fallbackGraceMs || 4000;
   var MIRRORS = window.__VK_SHELL_MIRRORS__ || {};
   var JS_MIRRORS = MIRRORS.js || [];
   var CSS_MIRRORS = MIRRORS.css || [];
@@ -22,6 +23,9 @@
 
   var done = { css: false, js: false };
   var doomed = false;
+  var fallbackTimer = null;
+  var waitTimer = null;
+  var pollTimer = null;
 
   function $(id) {
     return document.getElementById(id);
@@ -61,6 +65,7 @@
   bootBusy(true);
 
   function showFallback(code) {
+    if (window.__APP_READY__) { markReady(); return; }
     if (doomed) return;
     doomed = true;
     bootBusy(false);
@@ -68,13 +73,49 @@
     var detail = $("shell-fallback-detail");
     if (detail) detail.textContent = code || "";
     show("shell-fallback");
+    // Продолжаем ждать: если приложение всё-таки поднимется (напр. движок
+  // не прислал load у module-скрипта), прячем заглушку.
+  }
+
+  // Главный признак успеха — флаг, который выставляет само приложение.
+  // Не полагаемся только на событие load у <script type="module">: некоторые
+  // движки (напр. Яндекс.Браузер) его не присылают, хотя скрипт исполняется.
+  function markReady() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+    if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
+    doomed = false;
+    done.js = true;
+    bootBusy(false);
+    hide("shell-boot");
+    hide("shell-fallback");
+  }
+
+  function startReadyPoll() {
+    if (pollTimer) return;
+    function tick() {
+      pollTimer = null;
+      if (window.__APP_READY__) { markReady(); return; }
+      pollTimer = setTimeout(tick, 250);
+    }
+    pollTimer = setTimeout(tick, 250);
   }
 
   function waitReady() {
-    if (window.__APP_READY__ || doomed) return;
-    setTimeout(function () {
-      if (!window.__APP_READY__ && !doomed) showFallback("APP_TIMEOUT");
+    if (window.__APP_READY__) { markReady(); return; }
+    if (waitTimer) return;
+    waitTimer = setTimeout(function () {
+      if (!window.__APP_READY__) showFallback("APP_TIMEOUT");
     }, READY_WATCHDOG);
+  }
+
+  function scheduleFallback(code) {
+    if (window.__APP_READY__) { markReady(); return; }
+    if (fallbackTimer) return;
+    fallbackTimer = setTimeout(function () {
+      fallbackTimer = null;
+      if (!window.__APP_READY__) showFallback(code);
+    }, FALLBACK_GRACE);
   }
 
   function hash(s) {
@@ -190,7 +231,9 @@
       settled = true;
       stopTimer();
       if (kind === "js") {
-        showFallback("RESOURCES_UNAVAILABLE");
+        // Могло оказаться, что скрипт исполнился, но движок не прислал load.
+        // Даём приложению шанс отметиться (__APP_READY__) до показа заглушки.
+        scheduleFallback("RESOURCES_UNAVAILABLE");
       } else {
         // без стилей интерфейс всё равно поднимется
         done.css = true;
@@ -200,6 +243,7 @@
 
     function next() {
       if (settled) return;
+      if (window.__APP_READY__) { settled = true; stopTimer(); return; }
       stopTimer();
       if (index >= list.length) { giveUp(); return; }
       var url = list[index++];
@@ -235,6 +279,8 @@
   }
 
   /* ---- старт ---- */
+
+  startReadyPoll();
 
   var cachedJs = lsGet(JS_KEY);
   var cachedCss = lsGet(CSS_KEY);

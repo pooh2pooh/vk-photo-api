@@ -31,7 +31,7 @@ function Shell() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [setupRequired, setSetupRequired] = useState(false);
 
-  useCursorProgress(phase === "loading" || phase === "anon");
+  useCursorProgress(phase === "loading");
 
   // Никогда не блокируем интерфейс сетью: если session check не ответил за
   // отведённое время, показываем экран входа. Поздний ответ лишь повысит фазу.
@@ -101,6 +101,13 @@ function Shell() {
 }
 
 export function App() {
+  // Приложение реально смонтировано — снимаем экран первичной загрузки.
+  useEffect(() => {
+    window.__APP_READY__ = true;
+    document.body.classList.remove("shell-busy");
+    document.getElementById("shell-boot")?.remove();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <Shell />
