@@ -34,7 +34,19 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException ? error.name === "AbortError" : false;
 }
 
+function loader(): ShellLoader | undefined {
+  return window.__VK_LOADER__;
+}
+
+function now(): number {
+  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+}
+
 async function api<T>(action: string, init: RequestInit = {}): Promise<T> {
+  const method = init.method ?? "GET";
+  const started = now();
+  loader()?.net(`→ ${method} ${action}`);
+
   const url = new URL(`${BASE}?action=${encodeURIComponent(action)}`, window.location.href);
   for (const [key, value] of Object.entries(init.params ?? {})) {
     if (value !== undefined) url.searchParams.set(key, String(value));
@@ -46,16 +58,19 @@ async function api<T>(action: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, {
-      method: init.method ?? "GET",
+      method,
       credentials: "same-origin",
       headers: init.body !== undefined ? { "content-type": "application/json" } : undefined,
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
       signal: controller.signal,
     });
   } catch (error) {
+    const ms = Math.round(now() - started);
     if (isAbortError(error)) {
+      loader()?.error(`✖ ${action} TIMEOUT ${ms}мс`);
       throw new ApiError(0, "TIMEOUT", "Сервер не ответил вовремя", error);
     }
+    loader()?.error(`✖ ${action} NETWORK ${ms}мс`);
     throw new ApiError(0, "NETWORK", "Не удалось связаться с сервером", error);
   } finally {
     window.clearTimeout(timer);
@@ -68,15 +83,19 @@ async function api<T>(action: string, init: RequestInit = {}): Promise<T> {
     // тело не JSON — оставляем undefined
   }
 
+  const ms = Math.round(now() - started);
   const err = data?.error;
   if (!response.ok || err) {
+    const code = err?.code ?? `HTTP_${response.status}`;
+    loader()?.error(`← ${action} ${response.status} ${ms}мс — ${code}`);
     throw new ApiError(
       response.status,
-      err?.code ?? `HTTP_${response.status}`,
+      code,
       err?.message ?? `Ошибка HTTP ${response.status}`,
       err?.details,
     );
   }
+  loader()?.ok(`← ${action} ${response.status} ${ms}мс`);
   return data as T;
 }
 

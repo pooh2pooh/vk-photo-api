@@ -6,6 +6,8 @@ import react from "@vitejs/plugin-react";
 const PHP_TARGET = process.env.PHP_TARGET ?? "http://localhost:8090";
 
 // Статическая сборка в корень репозитория — работает в любой поддиректории.
+// Собираем классический IIFE-бандл (не ES-модуль), чтобы он грузился обычным
+// <script> во всех браузерах, включая старые движки.
 export default defineConfig({
   plugins: [react()],
   base: "./",
@@ -14,6 +16,17 @@ export default defineConfig({
     outDir: "../",
     emptyOutDir: false,
     sourcemap: true,
+    target: "es2017",
+    cssCodeSplit: false,
+    modulePreload: false,
+    rollupOptions: {
+      output: {
+        format: "iife",
+        inlineDynamicImports: true,
+        entryFileNames: "assets/app-[hash].js",
+        assetFileNames: "assets/app-[hash][extname]",
+      },
+    },
   },
   server: {
     port: 5173,

@@ -101,8 +101,7 @@ export function App() {
   // Приложение реально смонтировано — снимаем экран первичной загрузки.
   useEffect(() => {
     window.__APP_READY__ = true;
-    document.body.classList.remove("shell-busy");
-    document.getElementById("shell-boot")?.remove();
+    window.__VK_LOADER__?.end("Интерфейс готов");
   }, []);
 
   return (

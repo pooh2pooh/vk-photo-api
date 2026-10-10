@@ -16,17 +16,4 @@ if (!window.__VK_APP_MOUNTED__) {
       <App />
     </StrictMode>,
   );
-
-  // Сигнал отказоустойчивому загрузчику: приложение поднялось.
-  function signalReady() {
-    window.__APP_READY__ = true;
-    document.body.classList.remove("shell-busy");
-    document.getElementById("shell-boot")?.remove();
-  }
-
-  if (typeof window.requestAnimationFrame === "function") {
-    window.requestAnimationFrame(signalReady);
-  } else {
-    window.setTimeout(signalReady, 0);
-  }
 }
