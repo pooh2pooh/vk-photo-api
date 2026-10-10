@@ -35,10 +35,32 @@ export function Login({ setupRequired, onSuccess }: LoginProps) {
     <div className="login">
       <div className="login__screen" aria-live="polite">
         <div className="login__brand">
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
-            <circle cx="9" cy="11" r="2" fill="currentColor" />
-            <path d="M6 17l4-4 3 3 3-3 2 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          <svg width="72" height="72" viewBox="0 0 512 512" role="img" aria-label="Фото ВК">
+            <defs>
+              <linearGradient id="loginBrand" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#5b9bff" />
+                <stop offset="0.55" stopColor="#4c8bf5" />
+                <stop offset="1" stopColor="#2f6ae0" />
+              </linearGradient>
+              <linearGradient id="loginGloss" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="#ffffff" stopOpacity="0.22" />
+                <stop offset="0.5" stopColor="#ffffff" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <rect width="512" height="512" rx="116" fill="url(#loginBrand)" />
+            <rect width="512" height="256" rx="116" fill="url(#loginGloss)" />
+            <text
+              x="256"
+              y="262"
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontFamily="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+              fontWeight="700"
+              fontSize="312"
+              fill="#ffffff"
+            >
+              В
+            </text>
           </svg>
         </div>
         <h1 className="login__title">Сохранённые фото</h1>

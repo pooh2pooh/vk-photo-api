@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { Photo } from "../api/types.js";
 import { ApiError, GROUP_AUTH_ERROR_CODE } from "../api/client.js";
+import { PAGE_SIZE_DENSE, PAGE_SIZE_NORMAL, isDenseSize } from "../api/config.js";
 import { usePhotos, usePageSize } from "../hooks/usePhotos.js";
 import { Lightbox } from "./Lightbox.js";
 import { Pagination } from "./Pagination.js";
@@ -11,12 +11,16 @@ interface GalleryProps {
   onSessionExpired: () => void;
 }
 
+const MAX_SKELETONS = 60;
+
 export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
   const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<Photo | null>(null);
-  const query = usePhotos(page);
-  const pageSize = usePageSize();
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [pageSize, setPageSize] = usePageSize();
+  const query = usePhotos(page, pageSize);
 
+  const items = query.data?.items ?? [];
+  const dense = isDenseSize(pageSize);
   const busy = query.isFetching;
   const totalPages = query.data ? Math.max(1, Math.ceil(query.data.total / pageSize)) : 1;
 
@@ -31,6 +35,11 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
     return () => document.body.classList.remove("cursor-progress");
   }, [busy]);
 
+  const toggleDense = () => {
+    setPageSize(dense ? PAGE_SIZE_NORMAL : PAGE_SIZE_DENSE);
+    setPage(1);
+  };
+
   return (
     <section className="gallery" data-busy={busy ? "true" : "false"}>
       <header className="gallery__header">
@@ -38,9 +47,19 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
           <h1>Сохранённые фото ВКонтакте</h1>
           <p className="gallery__subtitle">
             {query.data ? `Всего: ${query.data.total}` : "Загрузка…"}
+            {query.data ? ` · на странице: ${pageSize}` : ""}
             {busy ? " · обновление…" : ""}
           </p>
         </div>
+        <button
+          type="button"
+          className="gallery__density"
+          onClick={toggleDense}
+          aria-pressed={dense}
+          title={dense ? "Вернуть крупные превью" : `Показать по ${PAGE_SIZE_DENSE} фото с мелкими превью`}
+        >
+          {dense ? "Обычный вид" : `Плотно · ${PAGE_SIZE_DENSE}`}
+        </button>
         <button type="button" className="gallery__refresh" onClick={() => query.refetch()} disabled={busy}>
           Обновить
         </button>
@@ -58,17 +77,21 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
       {query.isError ? (
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
       ) : query.isLoading ? (
-        <div className="grid" aria-busy="true">
-          {Array.from({ length: pageSize }).map((_, index) => (
+        <div className={dense ? "grid grid--dense" : "grid"} aria-busy="true">
+          {Array.from({ length: Math.min(pageSize, MAX_SKELETONS) }).map((_, index) => (
             <div key={index} className="photo-card photo-card--skeleton" />
           ))}
         </div>
-      ) : query.data && query.data.items.length === 0 ? (
+      ) : items.length === 0 ? (
         <div className="state">В альбоме нет фотографий.</div>
       ) : (
-        <div className="grid">
-          {query.data?.items.map((photo) => (
-            <PhotoCard key={`${photo.ownerId}_${photo.id}`} photo={photo} onOpen={setSelected} />
+        <div className={dense ? "grid grid--dense" : "grid"}>
+          {items.map((photo, index) => (
+            <PhotoCard
+              key={`${photo.ownerId}_${photo.id}`}
+              photo={photo}
+              onOpen={() => setSelectedIndex(index)}
+            />
           ))}
         </div>
       )}
@@ -83,7 +106,14 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
         disabled={query.isFetching}
       />
 
-      {selected ? <Lightbox photo={selected} onClose={() => setSelected(null)} /> : null}
+      {selectedIndex !== null && items[selectedIndex] ? (
+        <Lightbox
+          photos={items}
+          index={selectedIndex}
+          onIndexChange={setSelectedIndex}
+          onClose={() => setSelectedIndex(null)}
+        />
+      ) : null}
     </section>
   );
 }

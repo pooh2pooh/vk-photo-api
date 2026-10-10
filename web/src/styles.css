@@ -101,9 +101,14 @@ button {
   width: 72px;
   height: 72px;
   margin: 0 auto 16px;
+}
+
+.login__brand svg {
+  display: block;
+  width: 72px;
+  height: 72px;
   border-radius: 20px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-  color: #fff;
+  box-shadow: 0 8px 24px rgba(76, 139, 245, 0.28);
 }
 
 .login__title {
@@ -299,6 +304,12 @@ button {
   cursor: not-allowed;
 }
 
+.gallery__density[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: #fff;
+  background: rgba(76, 139, 245, 0.18);
+}
+
 /* ---------------------------------------------------------------- loading bar */
 
 .loading-bar {
@@ -399,6 +410,22 @@ button {
   }
 }
 
+/* Плотный режим: ~2× мелкие превью и плотнее сетка. */
+.grid--dense {
+  gap: 4px;
+}
+
+.grid--dense .photo-card {
+  flex-basis: 70px;
+  min-width: 54px;
+  height: 92px;
+  border-radius: 6px;
+}
+
+.grid--dense .photo-card--skeleton {
+  flex-basis: 70px;
+}
+
 /* ---------------------------------------------------------------- pagination */
 
 .pagination {
@@ -483,28 +510,55 @@ button {
   background: rgba(0, 0, 0, 0.85);
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 20px;
   z-index: 50;
   animation: fadeIn 0.2s ease both;
 }
 
 .lightbox__content {
   position: relative;
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: 92vw;
+  max-height: 92vh;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   animation: zoomIn 0.22s ease both;
 }
 
-.lightbox__content img {
-  max-width: 90vw;
-  max-height: 78vh;
+.lightbox__stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 180px;
+  min-height: min(48vh, 360px);
+}
+
+.lightbox__stage img {
+  max-width: 92vw;
+  max-height: 68vh;
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.32s ease;
+}
+
+.lightbox__stage img.is-loaded {
+  opacity: 1;
+}
+
+.lightbox__spinner {
+  position: absolute;
+  width: 38px;
+  height: 38px;
+  border-width: 3px;
+  animation: spin 0.7s linear infinite, fadeIn 0.2s ease both;
+}
+
+.lightbox__hint {
+  margin: 0;
+  color: var(--muted);
 }
 
 .lightbox__close {
@@ -519,21 +573,106 @@ button {
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
+  z-index: 3;
 }
 
 .lightbox__close:hover {
   background: #2b313c;
 }
 
-.lightbox__caption {
-  margin: 0;
+.lightbox__nav {
+  position: absolute;
+  top: 42%;
+  transform: translateY(-50%);
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  font-size: 1.7rem;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  background: rgba(33, 37, 46, 0.82);
+  color: var(--text);
+  z-index: 2;
+  backdrop-filter: blur(4px);
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.lightbox__nav:hover:not(:disabled) {
+  background: rgba(43, 49, 60, 0.95);
+}
+
+.lightbox__nav:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.lightbox__nav--prev {
+  left: -10px;
+}
+
+.lightbox__nav--next {
+  right: -10px;
+}
+
+.lightbox__info {
   text-align: center;
+  max-width: 92vw;
+}
+
+.lightbox__caption {
+  margin: 0 0 2px;
 }
 
 .lightbox__meta {
   margin: 0;
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+.lightbox__thumbs {
+  display: flex;
+  gap: 6px;
+  max-width: 92vw;
+  padding: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scroll-behavior: smooth;
+  background: rgba(24, 27, 34, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.lightbox__thumb {
+  flex: 0 0 auto;
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+  opacity: 0.55;
+  transition: opacity 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.lightbox__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lightbox__thumb:hover {
+  opacity: 1;
+}
+
+.lightbox__thumb.is-active {
+  opacity: 1;
+  border-color: var(--accent);
+  transform: translateY(-2px);
 }
 
 @keyframes fadeIn {
@@ -566,6 +705,35 @@ button {
   .photo-card {
     height: 150px;
     flex-basis: 100px;
+  }
+
+  .grid--dense .photo-card {
+    flex-basis: 64px;
+    min-width: 48px;
+    height: 82px;
+  }
+
+  .lightbox__stage img {
+    max-height: 58vh;
+  }
+
+  .lightbox__nav {
+    width: 40px;
+    height: 40px;
+    top: 40%;
+  }
+
+  .lightbox__nav--prev {
+    left: 2px;
+  }
+
+  .lightbox__nav--next {
+    right: 2px;
+  }
+
+  .lightbox__thumb {
+    width: 46px;
+    height: 46px;
   }
 }
 

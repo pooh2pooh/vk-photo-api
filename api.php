@@ -14,7 +14,7 @@ declare(strict_types=1);
 const ALBUM_ID = 'saved';
 const DEFAULT_API_VERSION = '5.199';
 const CACHE_TTL_SECONDS = 300;
-const MAX_COUNT = 100;
+const MAX_COUNT = 1000;
 
 /* ---------------------------------------------------------------- helpers */
 

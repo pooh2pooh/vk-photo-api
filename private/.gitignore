@@ -1,2 +1,4 @@
 cache/
+asset-cache/
+diag/
 secrets.php

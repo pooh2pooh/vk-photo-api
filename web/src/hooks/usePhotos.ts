@@ -1,6 +1,7 @@
+import { useCallback, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchPhotos } from "../api/client.js";
-import { getPageSize } from "../api/config.js";
+import { getPageSize, setPageSize } from "../api/config.js";
 import type { PhotosPage } from "../api/types.js";
 
 const PAGE_TTL_MS = 5 * 60 * 1000;
@@ -36,12 +37,16 @@ function writePageCache(offset: number, count: number, data: PhotosPage): void {
   }
 }
 
-export function usePageSize(): number {
-  return getPageSize();
+export function usePageSize(): [number, (value: number) => void] {
+  const [size, setSize] = useState<number>(() => getPageSize());
+  const update = useCallback((value: number) => {
+    setSize(value);
+    setPageSize(value);
+  }, []);
+  return [size, update];
 }
 
-export function usePhotos(page: number) {
-  const count = usePageSize();
+export function usePhotos(page: number, count: number) {
   const offset = (page - 1) * count;
 
   return useQuery({
