@@ -80,7 +80,9 @@
   rangePool: 4,
   rangeTimeoutMs: 1500,
   rangeRetries: 6,
-  rangeRetryDelayMs: 120
+  rangeRetryDelayMs: 120,
+  rangeHedgeMs: 500,
+  mirrorTimeoutMs: 5000
 };</script>
     <script>window.__VK_SHELL_EARLY_ERRORS__=[];window.addEventListener("error",function(e){var a=window.__VK_SHELL_EARLY_ERRORS__;if(a&&a.length<50)a.push(e);},true);</script>
   </head>
@@ -135,6 +137,8 @@
   var RANGE_TIMEOUT = CONFIG.rangeTimeoutMs || 1500;
   var RANGE_RETRIES = CONFIG.rangeRetries || 6;
   var RANGE_RETRY_DELAY = CONFIG.rangeRetryDelayMs || 120;
+  var RANGE_HEDGE_MS = CONFIG.rangeHedgeMs || 500;
+  var MIRROR_TIMEOUT = CONFIG.mirrorTimeoutMs || 5000;
   var MIRRORS = window.__VK_SHELL_MIRRORS__ || {};
   var JS_MIRRORS = MIRRORS.js || [];
   var CSS_MIRRORS = MIRRORS.css || [];
@@ -676,45 +680,99 @@
     chunkSize = chunkSize || RANGE_CHUNK;
     poolSize = poolSize || RANGE_POOL;
 
-    // Один запрос куска: короткий таймаут RANGE_TIMEOUT, raw-байты из Range.
-    // Повторную попытку шлём на URL с меткой — чтобы прокси/кэш не отдал
-    // тот же «зависший» ответ.
-    function fetchChunkOnce(ret, codeHolder) {
-      ret.attempt = (ret.attempt || 0) + 1;
-      var chunkUrl = ret.attempt > 1 ? withCacheBuster(url) : url;
-      return fetchWithTimeout(chunkUrl, {
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: { Range: "bytes=" + ret.start + "-" + ret.end },
-      }, RANGE_TIMEOUT)
-        .then(function (r) {
-          if (!r || r.status !== 206 || !r.ok) {
-            if (!codeHolder.r) {
-              codeHolder.r = new Error("диапазоны не поддерживаются (статус " + (r && r.status) + ")");
-              codeHolder.r.code = "RANGE_UNSUPPORTED";
-            }
-            throw codeHolder.r;
+    // Запрос куска. Если ответ не пришёл за RANGE_HEDGE_MS — шлём дубль
+    // (на другом соединении): какой ответит первым, тот и берём, остальные
+    // обрываем. В Яндексе «зависает» примерно каждый второй запрос, поэтому
+    // дубль резко сокращает ожидание. Жёсткий предел — RANGE_TIMEOUT.
+    // Повторные попытки идут на URL с меткой — чтобы прокси не отдал тот же
+    // «зависший» ответ.
+    function fetchChunkHedged(ret, codeHolder) {
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+        var pending = 0;
+        var ctrls = [];
+
+        function abortAll() {
+          for (var i = 0; i < ctrls.length; i++) {
+            try { ctrls[i].abort(); } catch (e) {}
           }
-          var meta = parseContentRange(header(r, "content-range"));
-          if (!meta) {
-            if (!codeHolder.r) {
-              codeHolder.r = new Error("нет Content-Range в ответе");
-              codeHolder.r.code = "RANGE_UNSUPPORTED";
+          ctrls = [];
+        }
+        function succeed(res) {
+          if (settled) return;
+          settled = true;
+          abortAll();
+          armRangeWatchdog();
+          resolve(res);
+        }
+        function fail(e) {
+          pending--;
+          if (settled) return;
+          if (pending <= 0) { settled = true; reject(e); }
+        }
+        function one() {
+          if (settled) return;
+          var ctrl = null;
+          try { if (typeof AbortController === "function") ctrl = new AbortController(); } catch (e) {}
+          if (ctrl) ctrls.push(ctrl);
+          pending++;
+          ret.attempt = (ret.attempt || 0) + 1;
+          var chunkUrl = ret.attempt > 1 ? withCacheBuster(url) : url;
+          var timer = setTimeout(function () {
+            try { if (ctrl) ctrl.abort(); } catch (e) {}
+            fail(new Error("таймаут " + RANGE_TIMEOUT + "мс"));
+          }, RANGE_TIMEOUT);
+          var opts = {
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: { Range: "bytes=" + ret.start + "-" + ret.end },
+          };
+          if (ctrl) opts.signal = ctrl.signal;
+          fetch(chunkUrl, opts).then(function (r) {
+            if (settled) { clearTimeout(timer); return; }
+            if (!r || r.status !== 206 || !r.ok) {
+              clearTimeout(timer);
+              if (!codeHolder.r) {
+                codeHolder.r = new Error("диапазоны не поддерживаются (статус " + (r && r.status) + ")");
+                codeHolder.r.code = "RANGE_UNSUPPORTED";
+              }
+              fail(codeHolder.r);
+              return;
             }
-            throw codeHolder.r;
-          }
-          if (meta.total != null) ret.total = meta.total;
-          return readBody(r, RANGE_TIMEOUT).then(function (t) {
-            armRangeWatchdog();
-            return { text: t, total: ret.total };
+            var meta = parseContentRange(header(r, "content-range"));
+            if (!meta) {
+              clearTimeout(timer);
+              if (!codeHolder.r) {
+                codeHolder.r = new Error("нет Content-Range в ответе");
+                codeHolder.r.code = "RANGE_UNSUPPORTED";
+              }
+              fail(codeHolder.r);
+              return;
+            }
+            if (meta.total != null) ret.total = meta.total;
+            readBody(r, RANGE_TIMEOUT).then(function (t) {
+              clearTimeout(timer);
+              succeed({ text: t, total: ret.total });
+            }, function (e) {
+              clearTimeout(timer);
+              fail(e);
+            });
+          }, function (e) {
+            clearTimeout(timer);
+            fail(e);
           });
-        });
+        }
+        one();
+        setTimeout(function () {
+          if (!settled && pending > 0) one();
+        }, RANGE_HEDGE_MS);
+      });
     }
 
     // Кусок с ретраями подряд (для пробы): при сбое повторить через паузу.
     function fetchChunk(ret, retriesLeft, codeHolder) {
       retriesLeft = retriesLeft == null ? RANGE_RETRIES : retriesLeft;
-      return fetchChunkOnce(ret, codeHolder).catch(function (e) {
+      return fetchChunkHedged(ret, codeHolder).catch(function (e) {
         if (retriesLeft > 0) {
           return delay(RANGE_RETRY_DELAY).then(function () {
             return fetchChunk(ret, retriesLeft - 1, codeHolder);
@@ -767,7 +825,7 @@
             // Пул: зависший кусок не блокирует поток — откладываем его в конец
             // очереди (после короткой паузы) и сразу берём следующий.
             function run(p) {
-              fetchChunkOnce(p, {})
+              fetchChunkHedged(p, {})
                 .then(function (res) {
                   inflight--;
                   if (failed) return;
@@ -808,6 +866,49 @@
         })
         .catch(function (e) { reject(e); });
     });
+  }
+
+  // Забрать готовый бандл с CDN-зеркала: один запрос по HTTP/2 вместо десятков
+  // Range-кусков с медленного хостинга. Пробуем только прямые зеркала (прокси —
+  // в позднем резерве): при отказе сразу уходим на onFail.
+  function runFromMirror(onFail) {
+    var urls = JS_MIRRORS.slice();
+    if (!urls.length) { if (onFail) onFail(); return; }
+
+    write("net", "Пробую бандл с зеркал (вариантов: " + urls.length + ")");
+    var index = 0;
+    function attempt() {
+      if (window.__APP_READY__) { markReady(); return; }
+      if (index >= urls.length) { if (onFail) onFail(); return; }
+      var url = urls[index++];
+      var started = now();
+      fetchWithTimeout(url, { credentials: "omit", cache: "force-cache" }, MIRROR_TIMEOUT)
+        .then(function (r) {
+          var ms = Math.round(now() - started);
+          if (!r || !r.ok) { write("warn", "Зеркало " + baseName(url) + " → " + (r && r.status) + " " + ms + "мс"); throw new Error("статус " + (r && r.status)); }
+          return readBody(r, MIRROR_TIMEOUT).then(function (t) {
+            write("ok", "Зеркало ответило: " + baseName(url) + " " + ms + "мс");
+            return t;
+          });
+        })
+        .then(function (t) {
+          if (!t || t.length < 600 || /^\s*</.test(t)) throw new Error("плохое содержимое");
+          write("info", "Зеркало: получено " + t.length + " байт");
+          storeBundle(t);
+          injectJsFromText(t, "mirror");
+          var deadline = now() + POST_INJECT_TIMEOUT;
+          (function check() {
+            if (window.__APP_READY__) { markReady(); return; }
+            if (now() >= deadline) { attempt(); return; }
+            setTimeout(check, 100);
+          })();
+        })
+        .catch(function (e) {
+          write("warn", "Зеркало не удалось: " + (e && (e.message || e)));
+          attempt();
+        });
+    }
+    attempt();
   }
 
   // Собрали бандл диапазонами — выполнить инлайн и дождаться готовности.
@@ -852,6 +953,19 @@
       rangeDownloadThenRun(sources[srcIndex++], tryNext);
     }
 
+    // Сначала — CDN-зеркало (один быстрый запрос по HTTP/2), затем Range-куски.
+    function tryMirrorThenRange() {
+      if (JS_MIRRORS.length) {
+        write("warn", "Яндекс.Браузер: пробую готовый бандл с зеркала");
+        runFromMirror(function () {
+          write("warn", "Зеркала не помогли, перехожу на Range-куски");
+          tryNext();
+        });
+      } else {
+        tryNext();
+      }
+    }
+
     // Сначала — уже скачанный ранее бандл: повторные заходы мгновенны,
     // Range-качаем только когда кэша нет или он не запустился.
     var cached = lsGet(JS_KEY);
@@ -862,8 +976,8 @@
       (function check() {
         if (window.__APP_READY__) { markReady(); return; }
         if (now() >= deadline) {
-          write("warn", "Кэш не запустился, качаю бандл Range-кусками");
-          tryNext();
+          write("warn", "Кэш не запустился, пробую зеркало/Range");
+          tryMirrorThenRange();
           return;
         }
         setTimeout(check, 100);
@@ -871,8 +985,8 @@
       return;
     }
 
-    write("warn", "Яндекс.Браузер: заряжаю бандл Range-кусками вместо целого тела");
-    tryNext();
+    write("warn", "Яндекс.Браузер: заряжаю бандл с зеркала или Range-кусками");
+    tryMirrorThenRange();
   }
 
   // Последний резерв: забрать бандл через fetch и выполнить инлайн.
@@ -937,14 +1051,15 @@
   }
 
   function runJsFallback() {
+    // Порядок: копия из localStorage (мгновенно) → CDN-зеркала (включая
+    // прокси) → второй источник статикой. Статика последней: на «медленном»
+    // хостинге она как раз и подвисает.
     var steps = [];
-    // Основной источник (JS_ASSET или JS) уже пробовали при старте — берём
-    // «второй» источник, затем копию из localStorage, затем CDN-зеркала.
-    if (JS_ASSET && JS) steps.push({ url: JS, label: "static" });
     var cached = lsGet(JS_KEY);
     if (cached) steps.push({ cache: cached });
     var urls = mirrorChain("js");
     for (var i = 0; i < urls.length; i++) steps.push({ url: urls[i] });
+    if (JS_ASSET && JS) steps.push({ url: JS, label: "static" });
 
     write("warn", "Резервный запуск JS (вариантов: " + steps.length + ")");
 

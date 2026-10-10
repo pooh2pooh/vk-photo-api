@@ -10,7 +10,8 @@
  * Источники зеркал перечисляются в web/shell-config.js, его копия ложится
  * рядом с index.html уже на сервере.
  */
-import { readFileSync, writeFileSync, readdirSync, unlinkSync, copyFileSync, statSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, unlinkSync, statSync, existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,6 +45,30 @@ const builtHtml = readFileSync(path.join(root, "index.html"), "utf8");
 const titleMatch = builtHtml.match(/<title>([^<]*)<\/title>/);
 const title = titleMatch ? titleMatch[1] : "Фото ВК";
 
+// CDN-зеркала: определяем github-репозиторий из git remote (или MIRROR_REPO)
+// и раздаём те же файлы через jsDelivr. Хэш в имени файла делает кэш CDN
+// безопасным. Если репозиторий не найден — зеркал нет, деградация штатная.
+function detectRepo() {
+  if (process.env.MIRROR_REPO) return process.env.MIRROR_REPO.trim();
+  try {
+    const url = execSync("git remote get-url origin", { cwd: root, stdio: ["ignore", "pipe", "ignore"] })
+      .toString().trim();
+    const m = url.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
+    if (m) return `${m[1]}/${m[2]}`;
+  } catch (e) {}
+  return "";
+}
+function mirrorUrls(repo, file) {
+  if (!repo) return [];
+  return [
+    `https://cdn.jsdelivr.net/gh/${repo}@main/assets/${file}`,
+    `https://fastly.jsdelivr.net/gh/${repo}@main/assets/${file}`,
+  ];
+}
+const repo = detectRepo();
+const jsMirrors = mirrorUrls(repo, jsName);
+const cssMirrors = mirrorUrls(repo, cssName);
+
 const runtime = readFileSync(path.join(webDir, "shell-runtime.js"), "utf8");
 
 // PHP-ручки: gzip-отдача ассета и приём диагностики. Если api.php нет рядом
@@ -67,7 +92,9 @@ const configInline = `window.__VK_SHELL_CONFIG__ = {
   rangePool: 4,
   rangeTimeoutMs: 1500,
   rangeRetries: 6,
-  rangeRetryDelayMs: 120
+  rangeRetryDelayMs: 120,
+  rangeHedgeMs: 500,
+  mirrorTimeoutMs: 5000
 };`;
 
 // Фавиконки/иконки кладём в корень (см. scripts/make-icons.sh), ссылки даём
@@ -175,7 +202,11 @@ ${iconLinks}
 `;
 
 writeFileSync(path.join(root, "index.html"), shellHtml);
-copyFileSync(path.join(webDir, "shell-config.js"), path.join(root, "shell-config.js"));
+const cfgTemplate = readFileSync(path.join(webDir, "shell-config.js"), "utf8");
+const shellCfg = cfgTemplate
+  .replace("%%JS_MIRRORS%%", JSON.stringify(jsMirrors, null, 4).replace(/\n\]/, "\n  ]"))
+  .replace("%%CSS_MIRRORS%%", JSON.stringify(cssMirrors, null, 4).replace(/\n\]/, "\n  ]"));
+writeFileSync(path.join(root, "shell-config.js"), shellCfg);
 
 let removed = 0;
 try {
