@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Gallery } from "./components/Gallery.js";
 import { Login } from "./components/Login.js";
 import { checkSession, logout } from "./api/client.js";
@@ -25,27 +25,40 @@ function useCursorProgress(active: boolean): void {
   }, [active]);
 }
 
+const SESSION_CHECK_TIMEOUT_MS = 6000;
+
 function Shell() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [setupRequired, setSetupRequired] = useState(false);
 
-  useCursorProgress(phase === "loading");
+  useCursorProgress(phase === "loading" || phase === "anon");
 
-  const { data: session, isError, refetch } = useQuery({
-    queryKey: ["session"],
-    queryFn: checkSession,
-    staleTime: 60_000,
-    refetchOnWindowFocus: true,
-  });
+  // Никогда не блокируем интерфейс сетью: если session check не ответил за
+  // отведённое время, показываем экран входа. Поздний ответ лишь повысит фазу.
+  const startSessionCheck = (): (() => void) => {
+    let active = true;
+    const deadline = window.setTimeout(() => {
+      if (active) setPhase("anon");
+    }, SESSION_CHECK_TIMEOUT_MS);
 
-  useEffect(() => {
-    if (session) {
-      setSetupRequired(Boolean(session.setupRequired));
-      setPhase(session.authorized ? "auth" : "anon");
-    } else if (isError) {
-      setPhase("anon");
-    }
-  }, [session, isError]);
+    checkSession()
+      .then((session) => {
+        if (!active) return;
+        setSetupRequired(Boolean(session.setupRequired));
+        setPhase(session.authorized ? "auth" : "anon");
+      })
+      .catch(() => {
+        if (active) setPhase("anon");
+      })
+      .finally(() => window.clearTimeout(deadline));
+
+    return () => {
+      active = false;
+      window.clearTimeout(deadline);
+    };
+  };
+
+  useEffect(() => startSessionCheck(), []);
 
   if (phase === "loading") {
     return (
@@ -64,7 +77,6 @@ function Shell() {
         setupRequired={setupRequired}
         onSuccess={() => {
           setPhase("auth");
-          void queryClient.invalidateQueries({ queryKey: ["session"] });
         }}
       />
     );
@@ -77,8 +89,8 @@ function Shell() {
   };
 
   const handleSessionExpired = () => {
-    void refetch();
     setPhase("anon");
+    startSessionCheck();
   };
 
   return (

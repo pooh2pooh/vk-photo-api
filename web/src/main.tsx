@@ -11,3 +11,10 @@ createRoot(container).render(
     <App />
   </StrictMode>,
 );
+
+// Сигнал отказоустойчивому загрузчику: приложение поднялось.
+window.requestAnimationFrame(() => {
+  window.__APP_READY__ = true;
+  document.body.classList.remove("shell-busy");
+  document.getElementById("shell-boot")?.remove();
+});

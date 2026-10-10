@@ -24,7 +24,6 @@ body {
 body {
   margin: 0;
   background: radial-gradient(1200px 600px at 50% -10%, #1a2030 0%, var(--bg) 60%);
-  background-attachment: fixed;
   color: var(--text);
 }
 
@@ -70,7 +69,7 @@ button {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border: 3px solid rgba(76, 139, 245, 0.25);
   border-top-color: var(--accent);
   animation: spin 0.7s linear infinite;
 }
@@ -164,7 +163,7 @@ button {
 .field input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: 0 0 0 3px rgba(76, 139, 245, 0.25);
 }
 
 .field__password {
@@ -196,8 +195,8 @@ button {
   margin: 0;
   padding: 10px 12px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--danger) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  background: rgba(242, 85, 90, 0.18);
+  border: 1px solid rgba(242, 85, 90, 0.45);
   color: #ffb4b7;
   font-size: 0.9rem;
   animation: shake 0.35s ease;

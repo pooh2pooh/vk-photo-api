@@ -28,11 +28,20 @@ interface RequestInit {
 
 const BASE = "./api.php";
 
+const REQUEST_TIMEOUT_MS = 8000;
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException ? error.name === "AbortError" : false;
+}
+
 async function api<T>(action: string, init: RequestInit = {}): Promise<T> {
   const url = new URL(`${BASE}?action=${encodeURIComponent(action)}`, window.location.href);
   for (const [key, value] of Object.entries(init.params ?? {})) {
     if (value !== undefined) url.searchParams.set(key, String(value));
   }
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   let response: Response;
   try {
@@ -41,9 +50,15 @@ async function api<T>(action: string, init: RequestInit = {}): Promise<T> {
       credentials: "same-origin",
       headers: init.body !== undefined ? { "content-type": "application/json" } : undefined,
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      signal: controller.signal,
     });
   } catch (error) {
+    if (isAbortError(error)) {
+      throw new ApiError(0, "TIMEOUT", "Сервер не ответил вовремя", error);
+    }
     throw new ApiError(0, "NETWORK", "Не удалось связаться с сервером", error);
+  } finally {
+    window.clearTimeout(timer);
   }
 
   let data: ResponseShape<T> | undefined;
