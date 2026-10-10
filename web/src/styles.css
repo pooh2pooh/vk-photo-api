@@ -469,6 +469,20 @@ button {
   line-height: 1.5;
 }
 
+.state__preview {
+  max-width: 680px;
+  margin: 10px auto 0;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .state code {
   background: var(--surface-2);
   padding: 2px 6px;
@@ -527,8 +541,11 @@ button {
   animation: zoomIn 0.22s ease both;
 }
 
-/* Сцена фиксированного размера: фото любого формата подгоняется внутрь,
-   поэтому лента миниатюр и кнопки под ней не «прыгают» при перелистывании. */
+/* Сцена фиксированного размера: фото любого формата вписывается внутрь,
+   поэтому лента миниатюр и кнопки под ней не «прыгают» при перелистывании.
+   Картинку позиционируем абсолютно — так проценты max-height считаются от
+   конечной высоты сцены (в grid с auto-строкой они игнорируются, и фото
+   обрезалось). */
 .lightbox__stage {
   position: relative;
   flex: 1 1 0;
@@ -539,6 +556,11 @@ button {
 }
 
 .lightbox__stage img {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;

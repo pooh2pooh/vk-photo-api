@@ -79,11 +79,20 @@ async function api<T>(action: string, init: RequestInit = {}): Promise<T> {
     window.clearTimeout(timer);
   }
 
-  let data: ResponseShape<T> | undefined;
+  let raw = "";
   try {
-    data = (await response.json()) as ResponseShape<T>;
+    raw = await response.text();
   } catch {
-    // тело не JSON — оставляем undefined
+    // тело не читается — оставляем пустым
+  }
+
+  let data: ResponseShape<T> | undefined;
+  if (raw !== "") {
+    try {
+      data = JSON.parse(raw) as ResponseShape<T>;
+    } catch {
+      data = undefined;
+    }
   }
 
   const ms = Math.round(now() - started);
@@ -97,6 +106,12 @@ async function api<T>(action: string, init: RequestInit = {}): Promise<T> {
       err?.message ?? `Ошибка HTTP ${response.status}`,
       err?.details,
     );
+  }
+  if (data === undefined) {
+    // Сервер ответил 200, но тело не JSON (обрыв, пустой ответ и т.п.).
+    const preview = raw.slice(0, 300);
+    loader()?.error(`← ${action} ${response.status} ${ms}мс — BAD_RESPONSE ${preview}`);
+    throw new ApiError(response.status, "BAD_RESPONSE", "Сервер вернул некорректный ответ", { preview });
   }
   loader()?.ok(`← ${action} ${response.status} ${ms}мс`);
   return data as T;

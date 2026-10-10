@@ -20,13 +20,20 @@ function cacheKey(offset: number, count: number): string {
   return `vkphotos_page_${offset}_${count}`;
 }
 
+/** Страница должна содержать массив items и числовой total. */
+function isValidPage(page: unknown): page is PhotosPage {
+  if (!page || typeof page !== "object") return false;
+  const candidate = page as Partial<PhotosPage>;
+  return Array.isArray(candidate.items) && typeof candidate.total === "number";
+}
+
 function readPageCache(offset: number, count: number): PhotosPage | undefined {
   try {
     const raw = window.localStorage.getItem(cacheKey(offset, count));
     if (!raw) return undefined;
     const parsed = JSON.parse(raw) as CachedPage<PhotosPage>;
     if (typeof parsed.at !== "number" || Date.now() - parsed.at > PAGE_TTL_MS) return undefined;
-    if (!Array.isArray(parsed.data?.items)) return undefined;
+    if (!isValidPage(parsed.data)) return undefined;
     return parsed.data;
   } catch {
     return undefined;
@@ -87,7 +94,9 @@ async function loadChunks(
     let page = readPageCache(spec.offset, spec.count);
     if (!page) {
       try {
-        page = await fetchPhotos(spec);
+        const fetched = await fetchPhotos(spec);
+        if (!isValidPage(fetched)) throw new Error("Сервер вернул некорректный ответ");
+        page = fetched;
       } catch (error) {
         if (items.length === 0) throw error;
         break; // показываем уже загруженное, не теряем всю страницу

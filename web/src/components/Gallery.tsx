@@ -128,6 +128,10 @@ function ErrorState({ error, onRetry }: ErrorStateProps) {
   const code = error instanceof ApiError ? error.code : "";
   const isGroupToken = code === GROUP_AUTH_ERROR_CODE;
   const isConfig = code === "NETWORK" || code === "VK_NOT_CONFIGURED";
+  const preview =
+    error instanceof ApiError && error.details && typeof error.details === "object"
+      ? (error.details as { preview?: string }).preview
+      : undefined;
 
   if (isGroupToken) {
     return (
@@ -154,6 +158,7 @@ function ErrorState({ error, onRetry }: ErrorStateProps) {
     <div className="state state--error">
       <p>Не удалось загрузить фотографии.</p>
       <p className="state__detail">{message}</p>
+      {preview ? <pre className="state__preview">{preview}</pre> : null}
       {!isConfig && (
         <button type="button" onClick={onRetry}>
           Повторить

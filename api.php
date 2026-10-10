@@ -20,11 +20,36 @@ const MAX_COUNT = 1000;
 
 function json_out(array $data, int $status = 200): never
 {
+    // Свой gzip с явным Content-Length: в Яндекс.Браузере большие ответы без
+    // него приходят с пустым телом («долгая загрузка», затем ошибка разбора).
+    // Заодно JSON сжимается в разы сильнее статики.
+    @ini_set('zlib.output_compression', '0');
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
+    $json = json_encode($data, $flags);
+    if ($json === false) {
+        $json = '{"error":{"code":"ENCODE_FAILED","message":"Не удалось сериализовать ответ","details":null}}';
+        $status = 500;
+    }
+
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
-    header('Cache-Control: no-store');
+    header('Cache-Control: no-store, no-transform');
     header('X-Content-Type-Options: nosniff');
-    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    header('Vary: Accept-Encoding');
+
+    $acceptsGzip = stripos((string) ($_SERVER['HTTP_ACCEPT_ENCODING'] ?? ''), 'gzip') !== false;
+    if ($acceptsGzip && function_exists('gzencode')) {
+        $body = (string) gzencode($json, 6);
+        header('Content-Encoding: gzip');
+    } else {
+        $body = $json;
+    }
+    header('Content-Length: ' . strlen($body));
+    echo $body;
     exit;
 }
 
@@ -132,7 +157,30 @@ function verify_credentials(array $s, string $username, string $password): bool
 
 /* ---------------------------------------------------------------- VK gateway */
 
-function vk_call(array $s, string $method, array $params): array
+/*
+ * Понятные сообщения для кодов ошибок VK API
+ * (см. https://dev.vk.com/reference/errors).
+ */
+function vk_error_message(int $code): string
+{
+    return match ($code) {
+        5       => 'VK отклонил токен: нужен user-токен со scope photos,offline',
+        6       => 'VK: слишком много запросов в секунду, попробуйте ещё раз',
+        7       => 'VK: нет прав на это действие',
+        9       => 'VK: сработал flood-контроль, попробуйте позже',
+        14      => 'VK требует капчу — войдите в аккаунт на vk.com и повторите',
+        15      => 'VK: доступ запрещён (проверьте настройки приватности альбома)',
+        27      => 'На сервере используется токен сообщества вместо user-токена',
+        29      => 'VK: достигнут лимит запросов, попробуйте позже',
+        100     => 'VK: неверные параметры запроса',
+        200     => 'VK: доступ к альбому «Сохранённые фото» запрещён',
+        1117    => 'VK-токен истёк — получите новый и впишите в private/secrets.php',
+        3610    => 'VK: пользователь деактивирован',
+        default => 'VK вернул ошибку',
+    };
+}
+
+function vk_call(array $s, string $method, array $params, int $attempt = 0): array
 {
     $params['access_token'] = (string) $s['vk_token'];
     $params['v'] = (string) ($s['api_version'] ?? DEFAULT_API_VERSION);
@@ -150,6 +198,11 @@ function vk_call(array $s, string $method, array $params): array
 
     $body = @file_get_contents($url, false, $ctx);
     if ($body === false) {
+        // Иногда VK/сеть просто моргают — даём пару попыток.
+        if ($attempt < 2) {
+            usleep(300_000 * ($attempt + 1));
+            return vk_call($s, $method, $params, $attempt + 1);
+        }
         fail(502, 'VK_UNAVAILABLE', 'Не удалось связаться с VK API');
     }
     $json = json_decode($body, true);
@@ -159,8 +212,13 @@ function vk_call(array $s, string $method, array $params): array
     if (isset($json['error'])) {
         $err = $json['error'];
         $code = (int) ($err['error_code'] ?? 0);
-        $msg = (string) ($err['error_msg'] ?? 'Unknown VK error');
-        fail(502, 'VK_' . $code, $msg, ['vk_code' => $code]);
+        // 6/9/29 — превышен лимит запросов; повторяем с нарастающей паузой.
+        if (in_array($code, [6, 9, 29], true) && $attempt < 2) {
+            usleep(400_000 * ($attempt + 1));
+            return vk_call($s, $method, $params, $attempt + 1);
+        }
+        $msg = (string) ($err['error_msg'] ?? '');
+        fail(502, 'VK_' . $code, vk_error_message($code) . ($msg !== '' ? ' (' . $msg . ')' : ''), ['vk_code' => $code]);
     }
     return is_array($json['response'] ?? null) ? $json['response'] : [];
 }
@@ -195,13 +253,20 @@ function map_photo(array $raw): array
     $display = pick_size($sizes, true);
     $thumb = pick_size($sizes, false);
 
+    // Подпись может содержать не-UTF-8 байты — приводим к валидному UTF-8,
+    // иначе ответ рискует «сломаться» на кодировании.
+    $text = (string) ($raw['text'] ?? '');
+    if ($text !== '' && function_exists('mb_check_encoding') && !mb_check_encoding($text, 'UTF-8')) {
+        $text = mb_convert_encoding($text, 'UTF-8', 'UTF-8');
+    }
+
     return [
         'id'           => (int) ($raw['id'] ?? 0),
         'ownerId'      => (int) ($raw['owner_id'] ?? 0),
         'albumId'      => (int) ($raw['album_id'] ?? 0),
         'width'        => (int) ($display['width'] ?? $raw['width'] ?? 0),
         'height'       => (int) ($display['height'] ?? $raw['height'] ?? 0),
-        'text'         => (string) ($raw['text'] ?? ''),
+        'text'         => $text,
         'date'         => (int) ($raw['date'] ?? 0),
         'thumbnailUrl' => $thumb['url'] ?? null,
         'displayUrl'   => $display['url'] ?? null,
