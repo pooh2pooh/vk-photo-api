@@ -50,26 +50,13 @@ button {
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 16px;
-}
-
-.boot__spinner {
-  width: 56px;
-  height: 56px;
-  display: grid;
-  place-items: center;
-}
-
-.boot__text {
-  color: var(--muted);
-  margin: 0;
 }
 
 .spinner {
-  width: 22px;
-  height: 22px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  border: 3px solid rgba(76, 139, 245, 0.25);
+  border: 4px solid rgba(76, 139, 245, 0.25);
   border-top-color: var(--accent);
   animation: spin 0.7s linear infinite;
 }

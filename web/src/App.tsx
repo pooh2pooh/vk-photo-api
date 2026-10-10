@@ -63,10 +63,7 @@ function Shell() {
   if (phase === "loading") {
     return (
       <div className="boot">
-        <div className="boot__spinner">
-          <span className="spinner" aria-hidden="true" />
-        </div>
-        <p className="boot__text">Загружаем…</p>
+        <span className="spinner" aria-hidden="true" />
       </div>
     );
   }

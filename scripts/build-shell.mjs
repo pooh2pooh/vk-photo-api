@@ -31,7 +31,9 @@ const configInline = `window.__VK_SHELL_CONFIG__ = {
   js: "./assets/${jsName}",
   css: "./assets/${cssName}",
   timeoutMs: 8000,
-  readyWatchdogMs: 12000
+  primaryTimeoutMs: 6000,
+  fallbackGraceMs: 4000,
+  readyWatchdogMs: 20000
 };`;
 
 const shellHtml = `<!doctype html>
@@ -45,8 +47,7 @@ const shellHtml = `<!doctype html>
       body.shell-busy, body.shell-busy * { cursor: progress !important; }
       #shell-boot {
         position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
-        align-content: center; gap: 16px; background: #0f1115; color: #9aa3b2;
-        font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #0f1115;
       }
       #shell-boot .ring {
         width: 44px; height: 44px; border-radius: 50%;
@@ -70,6 +71,7 @@ const shellHtml = `<!doctype html>
     <script>${configInline}</script>
     <script src="./shell-config.js"></script>
     <script>${runtime}</script>
+    <link rel="stylesheet" href="./assets/${cssName}" />
   </head>
   <body class="shell-busy">
     <div id="shell-boot" aria-hidden="true"><div class="ring"></div></div>
@@ -82,6 +84,7 @@ const shellHtml = `<!doctype html>
       </div>
     </div>
     <noscript>Для работы интерфейса нужен включённый JavaScript.</noscript>
+    <script type="module" src="./assets/${jsName}"></script>
   </body>
 </html>
 `;

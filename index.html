@@ -9,8 +9,7 @@
       body.shell-busy, body.shell-busy * { cursor: progress !important; }
       #shell-boot {
         position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
-        align-content: center; gap: 16px; background: #0f1115; color: #9aa3b2;
-        font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #0f1115;
       }
       #shell-boot .ring {
         width: 44px; height: 44px; border-radius: 50%;
@@ -32,20 +31,25 @@
       [hidden] { display: none !important; }
     </style>
     <script>window.__VK_SHELL_CONFIG__ = {
-  js: "./assets/index-CjWO0gAv.js",
-  css: "./assets/index-Df6yX0yO.css",
+  js: "./assets/index-aZuesrIa.js",
+  css: "./assets/index-Crdmq6en.css",
   timeoutMs: 8000,
-  readyWatchdogMs: 12000
+  primaryTimeoutMs: 6000,
+  fallbackGraceMs: 4000,
+  readyWatchdogMs: 20000
 };</script>
     <script src="./shell-config.js"></script>
-    <script>/* Резилентный загрузчик интерфейса.
- * Источники для каждого ресурса перебираются по цепочке:
- *   1) текст из localStorage (копия с прошлого успешного открытия);
- *   2) локальный файл ./assets/...;
- *   3) CDN-зеркала из shell-config.js (по одному, с таймаутом);
- *   4) те же зеркала через перебор прокси из shell-config.js.
- * Если собрать приложение не удалось — показываем понятную заглушку,
- * «вечной загрузки» не бывает.
+    <script>/* Отказоустойчивый монитор загрузки интерфейса.
+ *
+ * Основной бандл грузится обычными статическими тегами
+ * <script type="module"> и <link rel="stylesheet"> прямо в index.html —
+ * это самый совместимый способ (работает во всех браузерах, включая
+ * Яндекс.Браузер). Этот скрипт:
+ *   1) показывает единый спиннер;
+ *   2) ждёт готовности приложения по флагу window.__APP_READY__;
+ *   3) если основной бандл не запустился — перебирает резервные источники:
+ *      копию из localStorage → CDN-зеркала → те же зеркала через прокси;
+ *   4) при полном отказе показывает понятную заглушку (без «вечной загрузки»).
  */
 (function () {
   "use strict";
@@ -54,18 +58,22 @@
   var JS = CONFIG.js || "./assets/index.js";
   var CSS = CONFIG.css || "./assets/index.css";
   var TIMEOUT = CONFIG.timeoutMs || 8000;
-  var READY_WATCHDOG = CONFIG.readyWatchdogMs || 12000;
+  var PRIMARY_TIMEOUT = CONFIG.primaryTimeoutMs || 6000;
   var FALLBACK_GRACE = CONFIG.fallbackGraceMs || 4000;
+  var READY_WATCHDOG = CONFIG.readyWatchdogMs || 15000;
   var MIRRORS = window.__VK_SHELL_MIRRORS__ || {};
   var JS_MIRRORS = MIRRORS.js || [];
   var CSS_MIRRORS = MIRRORS.css || [];
   var PROXIES = MIRRORS.proxies || [];
 
-  var done = { css: false, js: false };
   var doomed = false;
-  var fallbackTimer = null;
-  var waitTimer = null;
+  var jsFallbackStarted = false;
+  var cssFallbackStarted = false;
+  var cachedPrimary = false;
   var pollTimer = null;
+  var primaryTimer = null;
+  var finalTimer = null;
+  var fallbackTimer = null;
 
   function $(id) {
     return document.getElementById(id);
@@ -77,6 +85,9 @@
   function hide(id) {
     var n = $(id);
     if (n) n.hidden = true;
+  }
+  function mountPoint() {
+    return document.body || document.head || document.documentElement;
   }
 
   function lsGet(k) {
@@ -102,61 +113,6 @@
   function bootBusy(on) {
     try { document.body.classList.toggle("shell-busy", on); } catch (e) {}
   }
-  bootBusy(true);
-
-  function showFallback(code) {
-    if (window.__APP_READY__) { markReady(); return; }
-    if (doomed) return;
-    doomed = true;
-    bootBusy(false);
-    hide("shell-boot");
-    var detail = $("shell-fallback-detail");
-    if (detail) detail.textContent = code || "";
-    show("shell-fallback");
-    // Продолжаем ждать: если приложение всё-таки поднимется (напр. движок
-  // не прислал load у module-скрипта), прячем заглушку.
-  }
-
-  // Главный признак успеха — флаг, который выставляет само приложение.
-  // Не полагаемся только на событие load у <script type="module">: некоторые
-  // движки (напр. Яндекс.Браузер) его не присылают, хотя скрипт исполняется.
-  function markReady() {
-    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-    if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-    if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
-    doomed = false;
-    done.js = true;
-    bootBusy(false);
-    hide("shell-boot");
-    hide("shell-fallback");
-  }
-
-  function startReadyPoll() {
-    if (pollTimer) return;
-    function tick() {
-      pollTimer = null;
-      if (window.__APP_READY__) { markReady(); return; }
-      pollTimer = setTimeout(tick, 250);
-    }
-    pollTimer = setTimeout(tick, 250);
-  }
-
-  function waitReady() {
-    if (window.__APP_READY__) { markReady(); return; }
-    if (waitTimer) return;
-    waitTimer = setTimeout(function () {
-      if (!window.__APP_READY__) showFallback("APP_TIMEOUT");
-    }, READY_WATCHDOG);
-  }
-
-  function scheduleFallback(code) {
-    if (window.__APP_READY__) { markReady(); return; }
-    if (fallbackTimer) return;
-    fallbackTimer = setTimeout(function () {
-      fallbackTimer = null;
-      if (!window.__APP_READY__) showFallback(code);
-    }, FALLBACK_GRACE);
-  }
 
   function hash(s) {
     var h = 9;
@@ -174,38 +130,75 @@
     }
   }
 
-  /* ---- инъекция текста (из localStorage) ---- */
+  /* ---- готовность приложения (главный признак успеха) ---- */
 
-  function injectJsFromText(text) {
-    try {
-      var blob = new Blob([text], { type: "text/javascript" });
-      var url = URL.createObjectURL(blob);
-      var s = document.createElement("script");
-      s.type = "module";
-      s.src = url;
-      s.onerror = function () {
-        try { URL.revokeObjectURL(url); } catch (e) {}
-        showFallback("CACHE_JS_INVALID");
-      };
-      document.head.appendChild(s);
-      done.js = true;
-      hide("shell-boot");
-      waitReady();
-      return true;
-    } catch (e) {
-      return false;
+  function markReady() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    if (primaryTimer) { clearTimeout(primaryTimer); primaryTimer = null; }
+    if (finalTimer) { clearTimeout(finalTimer); finalTimer = null; }
+    if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+    doomed = false;
+    bootBusy(false);
+    hide("shell-boot");
+    hide("shell-fallback");
+    cachePrimary();
+  }
+
+  function startReadyPoll() {
+    if (pollTimer) return;
+    function tick() {
+      pollTimer = null;
+      if (window.__APP_READY__) { markReady(); return; }
+      pollTimer = setTimeout(tick, 250);
     }
+    pollTimer = setTimeout(tick, 250);
   }
 
-  function injectCssFromText(text) {
-    var st = document.createElement("style");
-    st.textContent = text;
-    document.head.appendChild(st);
-    done.css = true;
-    waitReady();
+  function showFallback(code) {
+    if (window.__APP_READY__) { markReady(); return; }
+    if (doomed) return;
+    doomed = true;
+    bootBusy(false);
+    hide("shell-boot");
+    var detail = $("shell-fallback-detail");
+    if (detail) detail.textContent = code || "";
+    show("shell-fallback");
   }
 
-  /* ---- сеть: цепочка локальный → зеркала → зеркала через прокси ---- */
+  function scheduleFallback(code) {
+    if (window.__APP_READY__) { markReady(); return; }
+    if (fallbackTimer) return;
+    fallbackTimer = setTimeout(function () {
+      fallbackTimer = null;
+      if (!window.__APP_READY__) showFallback(code);
+    }, FALLBACK_GRACE);
+  }
+
+  /* ---- кэширование основного бандла для офлайна ---- */
+
+  function cacheText(kind, url) {
+    try {
+      fetch(url, { credentials: "omit" }).then(function (r) {
+        if (!r.ok) return null;
+        return r.text();
+      }).then(function (t) {
+        if (!t || t.length < 600) return;
+        if (/^\s*</.test(t)) return;
+        var key = kind === "js" ? JS_KEY : CSS_KEY;
+        lsSet(key, t);
+        evictOld(kind === "js" ? "vk_shell_js_" : "vk_shell_css_", key);
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
+  function cachePrimary() {
+    if (cachedPrimary) return;
+    cachedPrimary = true;
+    cacheText("js", JS);
+    cacheText("css", CSS);
+  }
+
+  /* ---- инъекция резервных ресурсов ---- */
 
   function wrapWithProxies(url) {
     var list = [url];
@@ -221,9 +214,9 @@
     return list;
   }
 
-  function chain(kind) {
+  function mirrorChain(kind) {
     var mirrors = kind === "js" ? JS_MIRRORS : CSS_MIRRORS;
-    var out = [kind === "js" ? JS : CSS];
+    var out = [];
     for (var m = 0; m < mirrors.length; m++) {
       var wrapped = wrapWithProxies(mirrors[m]);
       for (var w = 0; w < wrapped.length; w++) out.push(wrapped[w]);
@@ -231,115 +224,124 @@
     return out;
   }
 
-  function cacheText(kind, url) {
+  function injectJsFromText(text) {
     try {
-      fetch(url, { credentials: "omit" }).then(function (r) {
-        if (!r.ok) return null;
-        return r.text();
-      }).then(function (t) {
-        if (!t || t.length < 600) return;
-        if (/^\s*</.test(t)) return; // не кэшируем HTML/ошибку
-        var key = kind === "js" ? JS_KEY : CSS_KEY;
-        lsSet(key, t);
-        evictOld(kind === "js" ? "vk_shell_js_" : "vk_shell_css_", key);
-      }).catch(function () {});
-    } catch (e) {}
+      var blob = new Blob([text], { type: "text/javascript" });
+      var url = URL.createObjectURL(blob);
+      var s = document.createElement("script");
+      s.type = "module";
+      s.src = url;
+      s.onerror = function () { try { URL.revokeObjectURL(url); } catch (e) {} };
+      mountPoint().appendChild(s);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
-  function runChain(kind) {
-    var list = chain(kind);
-    var index = 0;
-    var timer = null;
-    var settled = false;
-    var currentUrl = null;
-
-    function stopTimer() {
-      if (timer) { clearTimeout(timer); timer = null; }
-    }
-
-    function complete() {
-      if (settled) return;
-      settled = true;
-      stopTimer();
-      if (currentUrl) cacheText(kind, currentUrl);
-      if (kind === "js") { done.js = true; waitReady(); }
-      else { done.css = true; waitReady(); }
-    }
-
-    function giveUp() {
-      if (settled) return;
-      settled = true;
-      stopTimer();
-      if (kind === "js") {
-        // Могло оказаться, что скрипт исполнился, но движок не прислал load.
-        // Даём приложению шанс отметиться (__APP_READY__) до показа заглушки.
-        scheduleFallback("RESOURCES_UNAVAILABLE");
-      } else {
-        // без стилей интерфейс всё равно поднимется
-        done.css = true;
-        waitReady();
-      }
-    }
-
-    function next() {
-      if (settled) return;
-      if (window.__APP_READY__) { settled = true; stopTimer(); return; }
-      stopTimer();
-      if (index >= list.length) { giveUp(); return; }
-      var url = list[index++];
-      currentUrl = url;
-      timer = setTimeout(next, TIMEOUT);
-      loadOne(kind, url, complete, next);
-    }
-
-    next();
+  function injectCssFromText(text) {
+    var st = document.createElement("style");
+    st.textContent = text;
+    document.head.appendChild(st);
   }
 
-  function makeScript(url) {
+  function injectJsUrl(url) {
     var s = document.createElement("script");
     s.type = "module";
     s.src = url;
-    s.crossOrigin = "anonymous";
+    mountPoint().appendChild(s);
     return s;
   }
 
-  function makeStylesheet(url) {
+  function injectCssUrl(url, onError) {
     var l = document.createElement("link");
     l.rel = "stylesheet";
     l.href = url;
-    l.onerror = function () { try { l.remove(); } catch (e) {} };
+    l.onerror = function () {
+      try { l.remove(); } catch (e) {}
+      if (onError) onError();
+    };
+    document.head.appendChild(l);
     return l;
   }
 
-  function loadOne(kind, url, ok, no) {
-    var node = kind === "js" ? makeScript(url) : makeStylesheet(url);
-    node.onload = ok;
-    node.onerror = no;
-    document.head.appendChild(node);
+  /* ---- перебор резервных источников ---- */
+
+  function runJsFallback() {
+    var steps = [];
+    var cached = lsGet(JS_KEY);
+    if (cached) steps.push({ cache: cached });
+    var urls = mirrorChain("js");
+    for (var i = 0; i < urls.length; i++) steps.push({ url: urls[i] });
+
+    var index = 0;
+    function attempt() {
+      if (window.__APP_READY__) { markReady(); return; }
+      if (index >= steps.length) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+      var step = steps[index++];
+      if (step.cache) injectJsFromText(step.cache);
+      else injectJsUrl(step.url);
+      setTimeout(function () {
+        if (window.__APP_READY__) { markReady(); return; }
+        attempt();
+      }, TIMEOUT);
+    }
+    attempt();
+  }
+
+  function runCssFallback() {
+    var cached = lsGet(CSS_KEY);
+    if (cached) injectCssFromText(cached);
+    var urls = mirrorChain("css");
+    var index = 0;
+    function attempt() {
+      if (index >= urls.length) return;
+      var url = urls[index++];
+      injectCssUrl(url, attempt);
+    }
+    attempt();
+  }
+
+  function startFallback(kind) {
+    if (window.__APP_READY__) { markReady(); return; }
+    if (kind === "js") {
+      if (jsFallbackStarted) return;
+      jsFallbackStarted = true;
+      runJsFallback();
+    } else {
+      if (cssFallbackStarted) return;
+      cssFallbackStarted = true;
+      runCssFallback();
+    }
+  }
+
+  function onResourceError(event) {
+    var target = event.target;
+    if (!target) return;
+    var tag = target.tagName;
+    if (tag !== "SCRIPT" && tag !== "LINK") return;
+    var url = target.src || target.href || "";
+    if (typeof url !== "string") return;
+    if (/\.js(\?|#|$)/i.test(url)) startFallback("js");
+    else if (/\.css(\?|#|$)/i.test(url)) startFallback("css");
   }
 
   /* ---- старт ---- */
 
+  bootBusy(true);
   startReadyPoll();
 
-  var cachedJs = lsGet(JS_KEY);
-  var cachedCss = lsGet(CSS_KEY);
+  window.addEventListener("error", onResourceError, true);
 
-  if (cachedCss) {
-    injectCssFromText(cachedCss);
-  } else {
-    runChain("css");
-  }
+  primaryTimer = setTimeout(function () {
+    if (!window.__APP_READY__) startFallback("js");
+  }, PRIMARY_TIMEOUT);
 
-  if (cachedJs) {
-    injectJsFromText(cachedJs);
-    // фоном обновляем копию в localStorage и проверяем доступность сети
-    cacheText("js", JS);
-    cacheText("css", CSS);
-  } else {
-    runChain("js");
-  }
+  finalTimer = setTimeout(function () {
+    if (!window.__APP_READY__) showFallback("APP_TIMEOUT");
+  }, READY_WATCHDOG);
 })();</script>
+    <link rel="stylesheet" href="./assets/index-Crdmq6en.css" />
   </head>
   <body class="shell-busy">
     <div id="shell-boot" aria-hidden="true"><div class="ring"></div></div>
@@ -352,5 +354,6 @@
       </div>
     </div>
     <noscript>Для работы интерфейса нужен включённый JavaScript.</noscript>
+    <script type="module" src="./assets/index-aZuesrIa.js"></script>
   </body>
 </html>
