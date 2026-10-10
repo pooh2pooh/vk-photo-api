@@ -24,11 +24,14 @@ interface RequestInit {
   method?: "GET" | "POST";
   params?: Record<string, string | number>;
   body?: unknown;
+  timeoutMs?: number;
 }
 
 const BASE = "./api.php";
 
-const REQUEST_TIMEOUT_MS = 8000;
+const REQUEST_TIMEOUT_MS = 10000;
+/** Фото тянутся порциями, но каждая порция ждёт VK — даём запас. */
+const PHOTOS_TIMEOUT_MS = 20000;
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException ? error.name === "AbortError" : false;
@@ -53,7 +56,7 @@ async function api<T>(action: string, init: RequestInit = {}): Promise<T> {
   }
 
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = window.setTimeout(() => controller.abort(), init.timeoutMs ?? REQUEST_TIMEOUT_MS);
 
   let response: Response;
   try {
@@ -107,7 +110,10 @@ export const login = (username: string, password: string): Promise<AuthResult> =
 export const logout = (): Promise<AuthResult> => api("logout");
 
 export function fetchPhotos(input: { offset: number; count: number }): Promise<PhotosPage> {
-  return api<PhotosPage>("photos", { params: { offset: input.offset, count: input.count } });
+  return api<PhotosPage>("photos", {
+    params: { offset: input.offset, count: input.count },
+    timeoutMs: PHOTOS_TIMEOUT_MS,
+  });
 }
 
 export const GROUP_AUTH_ERROR_CODE = "VK_27";

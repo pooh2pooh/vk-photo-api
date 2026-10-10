@@ -23,6 +23,7 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
 
   const lastNavRef = useRef(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const thumbsRef = useRef<HTMLDivElement>(null);
   const activeThumbRef = useRef<HTMLButtonElement>(null);
 
@@ -45,11 +46,21 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
     setLoaded(false);
     setFailed(false);
     setShowSpinner(false);
+    // Картинка из кэша может быть готова ещё до события load —
+    // проверяем сразу, иначе спиннер «залипнет» навсегда.
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setLoaded(true);
+    }
   }, [photoId]);
 
-  // Спиннер показываем только если картинка грузится дольше SPINNER_DELAY_MS.
+  // Спиннер показываем только если картинка грузится дольше SPINNER_DELAY_MS,
+  // и обязательно прячем, как только она загрузилась (или не смогла).
   useEffect(() => {
-    if (loaded || failed || !photo?.displayUrl) return;
+    if (loaded || failed || !photo?.displayUrl) {
+      setShowSpinner(false);
+      return;
+    }
     const timer = window.setTimeout(() => setShowSpinner(true), SPINNER_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [loaded, failed, photoId, photo?.displayUrl]);
@@ -153,6 +164,7 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
           {src && !failed ? (
             <img
               key={photo.id}
+              ref={imgRef}
               src={src}
               alt={photo.text}
               className={loaded ? "is-loaded" : undefined}
@@ -160,7 +172,9 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
               onError={() => setFailed(true)}
             />
           ) : null}
-          {showSpinner ? <span className="spinner lightbox__spinner" aria-hidden="true" /> : null}
+          {showSpinner && !loaded && !failed ? (
+            <span className="spinner lightbox__spinner" aria-hidden="true" />
+          ) : null}
           {failed || (!src && !failed) ? (
             <p className="lightbox__hint">{failed ? "Не удалось загрузить" : "Изображение недоступно"}</p>
           ) : null}

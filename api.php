@@ -108,6 +108,11 @@ function require_auth(): void
     if (empty($_SESSION['vkphotos_authorized'])) {
         fail(401, 'UNAUTHORIZED', 'Требуется вход');
     }
+    // Освобождаем блокировку сессии до долгого запроса к VK.
+    // Иначе параллельные запросы того же пользователя (проверка сессии,
+    // вход, следующие страницы) ждут освобождения файла сессии и падают
+    // по таймауту с «Сервер не ответил вовремя».
+    session_write_close();
 }
 
 function verify_credentials(array $s, string $username, string $password): bool

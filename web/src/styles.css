@@ -517,26 +517,30 @@ button {
 
 .lightbox__content {
   position: relative;
-  max-width: 92vw;
+  width: min(92vw, 1400px);
+  height: min(92vh, 900px);
   max-height: 92vh;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 10px;
   animation: zoomIn 0.22s ease both;
 }
 
+/* Сцена фиксированного размера: фото любого формата подгоняется внутрь,
+   поэтому лента миниатюр и кнопки под ней не «прыгают» при перелистывании. */
 .lightbox__stage {
   position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
   display: grid;
   place-items: center;
-  min-width: 180px;
-  min-height: min(48vh, 360px);
 }
 
 .lightbox__stage img {
-  max-width: 92vw;
-  max-height: 68vh;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.6);
@@ -617,6 +621,7 @@ button {
 }
 
 .lightbox__info {
+  align-self: center;
   text-align: center;
   max-width: 92vw;
 }
@@ -632,9 +637,11 @@ button {
 }
 
 .lightbox__thumbs {
+  align-self: center;
   display: flex;
   gap: 6px;
-  max-width: 92vw;
+  width: fit-content;
+  max-width: 100%;
   padding: 6px;
   overflow-x: auto;
   overscroll-behavior-x: contain;

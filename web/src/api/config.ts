@@ -6,6 +6,12 @@ export const PAGE_SIZE_NORMAL = 30;
 export const PAGE_SIZE_DENSE = 666;
 /** Максимум, который принимает бэкенд (совпадает с VK photos.get). */
 export const PAGE_SIZE_MAX = 1000;
+/**
+ * Размер одного сетевого запроса. Большую страницу (например, 666 фото)
+ * тянем несколькими порциями: каждый запрос быстрый и кэшируется, а фото
+ * появляются по мере загрузки — без «вечного» ожидания и таймаутов.
+ */
+export const PAGE_CHUNK_SIZE = 100;
 
 export function getPageSize(): number {
   try {

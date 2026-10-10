@@ -56,9 +56,9 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
           className="gallery__density"
           onClick={toggleDense}
           aria-pressed={dense}
-          title={dense ? "Вернуть крупные превью" : `Показать по ${PAGE_SIZE_DENSE} фото с мелкими превью`}
+          title={dense ? "Вернуть крупные превью" : `Обзор: показать по ${PAGE_SIZE_DENSE} фото с мелкими превью`}
         >
-          {dense ? "Обычный вид" : `Плотно · ${PAGE_SIZE_DENSE}`}
+          {dense ? "Обычный вид" : "Обзор"}
         </button>
         <button type="button" className="gallery__refresh" onClick={() => query.refetch()} disabled={busy}>
           Обновить

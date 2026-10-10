@@ -1,14 +1,19 @@
 import { useCallback, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchPhotos } from "../api/client.js";
-import { getPageSize, setPageSize } from "../api/config.js";
-import type { PhotosPage } from "../api/types.js";
+import { PAGE_CHUNK_SIZE, getPageSize, setPageSize } from "../api/config.js";
+import type { Photo, PhotosPage } from "../api/types.js";
 
 const PAGE_TTL_MS = 5 * 60 * 1000;
 
 interface CachedPage<T> {
   at: number;
   data: T;
+}
+
+interface ChunkSpec {
+  offset: number;
+  count: number;
 }
 
 function cacheKey(offset: number, count: number): string {
@@ -37,6 +42,70 @@ function writePageCache(offset: number, count: number, data: PhotosPage): void {
   }
 }
 
+/** Режем запрошенную страницу на порции не больше PAGE_CHUNK_SIZE. */
+function chunkSpecs(offset: number, count: number): ChunkSpec[] {
+  const specs: ChunkSpec[] = [];
+  for (let done = 0; done < count; done += PAGE_CHUNK_SIZE) {
+    specs.push({ offset: offset + done, count: Math.min(PAGE_CHUNK_SIZE, count - done) });
+  }
+  return specs;
+}
+
+/** Склеиваем страницу, только если все её порции уже в кэше. */
+function readFullCache(specs: ChunkSpec[]): PhotosPage | undefined {
+  const items: Photo[] = [];
+  let total = 0;
+  for (const spec of specs) {
+    const cached = readPageCache(spec.offset, spec.count);
+    if (!cached) return undefined;
+    total = cached.total;
+    items.push(...cached.items);
+  }
+  const first = specs[0] ?? { offset: 0, count: 0 };
+  return { total, offset: first.offset, count: items.length, hasMore: items.length < total, items };
+}
+
+function buildPage(specs: ChunkSpec[], items: Photo[], total: number): PhotosPage {
+  const first = specs[0] ?? { offset: 0, count: 0 };
+  return { total, offset: first.offset, count: items.length, hasMore: items.length < total, items };
+}
+
+/**
+ * Загружаем порции по очереди, отдавая промежуточный результат через onPartial:
+ * пользователь видит фото по мере поступления. Если падает не первая порция —
+ * не роняем галерею, а показываем то, что успели загрузить.
+ */
+async function loadChunks(
+  specs: ChunkSpec[],
+  onPartial: (page: PhotosPage) => void,
+): Promise<PhotosPage> {
+  const items: Photo[] = [];
+  const pageOffset = specs[0]?.offset ?? 0;
+  let total = 0;
+
+  for (const spec of specs) {
+    let page = readPageCache(spec.offset, spec.count);
+    if (!page) {
+      try {
+        page = await fetchPhotos(spec);
+      } catch (error) {
+        if (items.length === 0) throw error;
+        break; // показываем уже загруженное, не теряем всю страницу
+      }
+      writePageCache(spec.offset, spec.count, page);
+    }
+    total = page.total;
+    items.push(...page.items);
+    onPartial(buildPage(specs, items, total));
+
+    // Альбом кончился: сервер вернул меньше, чем просили, или уже всё собрали.
+    if (page.items.length < spec.count) break;
+    if (total > 0 && items.length >= total - pageOffset) break;
+  }
+
+  return buildPage(specs, items, total);
+}
+
 export function usePageSize(): [number, (value: number) => void] {
   const [size, setSize] = useState<number>(() => getPageSize());
   const update = useCallback((value: number) => {
@@ -48,17 +117,14 @@ export function usePageSize(): [number, (value: number) => void] {
 
 export function usePhotos(page: number, count: number) {
   const offset = (page - 1) * count;
+  const specs = chunkSpecs(offset, count);
+  const queryKey: [string, { offset: number; count: number }] = ["photos", { offset, count }];
 
   return useQuery({
-    queryKey: ["photos", { offset, count }],
-    queryFn: async () => {
-      const data = await fetchPhotos({ offset, count });
-      writePageCache(offset, count, data);
-      return data;
-    },
-    // Свежие данные из localStorage показываются мгновенно,
-    // после TTL выполняется тихое обновление.
-    initialData: () => readPageCache(offset, count),
+    queryKey,
+    queryFn: (context) => loadChunks(specs, (partial) => context.client.setQueryData(queryKey, partial)),
+    // Мгновенный показ на повторных заходах, только если закэширована вся страница.
+    initialData: () => readFullCache(specs),
     staleTime: PAGE_TTL_MS,
     placeholderData: keepPreviousData,
     retry: 1,
