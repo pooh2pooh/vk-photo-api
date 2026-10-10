@@ -67,6 +67,8 @@
   timeoutMs: 8000,
   primaryTimeoutMs: 6000,
   fallbackGraceMs: 4000,
+  postInjectTimeoutMs: 4000,
+  earlyFallbackMs: 1500,
   readyWatchdogMs: 20000
 };</script>
     <script>window.__VK_SHELL_EARLY_ERRORS__=[];window.addEventListener("error",function(e){var a=window.__VK_SHELL_EARLY_ERRORS__;if(a&&a.length<50)a.push(e);},true);</script>
@@ -109,6 +111,8 @@
   var PRIMARY_TIMEOUT = CONFIG.primaryTimeoutMs || 6000;
   var FALLBACK_GRACE = CONFIG.fallbackGraceMs || 4000;
   var READY_WATCHDOG = CONFIG.readyWatchdogMs || 20000;
+  var POST_INJECT_TIMEOUT = CONFIG.postInjectTimeoutMs || 4000;
+  var EARLY_FALLBACK = CONFIG.earlyFallbackMs || 1500;
   var MIRRORS = window.__VK_SHELL_MIRRORS__ || {};
   var JS_MIRRORS = MIRRORS.js || [];
   var CSS_MIRRORS = MIRRORS.css || [];
@@ -127,6 +131,7 @@
   var cachedPrimary = false;
   var pollTimer = null;
   var primaryTimer = null;
+  var earlyTimer = null;
   var finalTimer = null;
   var fallbackTimer = null;
   var logHideTimer = null;
@@ -281,6 +286,7 @@
   function clearTimers() {
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     if (primaryTimer) { clearTimeout(primaryTimer); primaryTimer = null; }
+    if (earlyTimer) { clearTimeout(earlyTimer); earlyTimer = null; }
     if (finalTimer) { clearTimeout(finalTimer); finalTimer = null; }
     if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
   }
@@ -432,14 +438,15 @@
     return out;
   }
 
-  function injectJsFromText(text) {
+  // Инлайновая инъекция кода: скрипт без src, содержимое — textContent.
+  // Самый совместимый способ (инлайн-скрипты на этой странице разрешены —
+  // загрузчик тоже инлайновый), не зависит от blob:/MIME/type=module.
+  function injectJsFromText(text, label) {
     try {
-      var blob = new Blob([text], { type: "text/javascript" });
-      var url = URL.createObjectURL(blob);
       var s = el("script");
       if (!s) return false;
-      s.src = url;
-      s.onerror = function () { try { URL.revokeObjectURL(url); } catch (e) {} };
+      s.textContent = text;
+      s.setAttribute("data-shell-source", label || "inline");
       mountPoint().appendChild(s);
       return true;
     } catch (e) {
@@ -476,6 +483,44 @@
     return l;
   }
 
+  // Последний резерв: забрать бандл через fetch и выполнить инлайн.
+  // Работает, когда статический <script> блокируется молча (без load/error).
+  function runLocalFetchThenStub() {
+    if (typeof fetch !== "function") { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+    write("net", "Резервный fetch " + JS);
+    var started = now();
+    fetch(JS, { credentials: "same-origin" })
+      .then(function (r) {
+        var ms = Math.round(now() - started);
+        var ct = "";
+        try { ct = r.headers && r.headers.get ? r.headers.get("content-type") || "" : ""; } catch (e) {}
+        write(r.ok ? "ok" : "error", "fetch " + JS + " → " + r.status + " " + ct + " " + ms + "мс");
+        if (!r.ok) return null;
+        return r.text();
+      })
+      .then(function (t) {
+        if (!t) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+        write("info", "fetch: получено " + t.length + " байт");
+        if (/^\s*</.test(t)) {
+          write("error", "fetch: ответ похож на HTML, а не на JS");
+          scheduleFallback("RESOURCES_UNAVAILABLE");
+          return;
+        }
+        write("warn", "Выполняю инлайн-инъекцию бандла");
+        injectJsFromText(t, "fetch");
+        var deadline = now() + POST_INJECT_TIMEOUT;
+        (function check() {
+          if (window.__APP_READY__) { markReady(); return; }
+          if (now() >= deadline) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+          setTimeout(check, 100);
+        })();
+      })
+      .catch(function (e) {
+        write("error", "fetch не удался: " + (e && (e.message || e)));
+        scheduleFallback("RESOURCES_UNAVAILABLE");
+      });
+  }
+
   function runJsFallback() {
     var steps = [];
     var cached = lsGet(JS_KEY);
@@ -488,11 +533,11 @@
     var index = 0;
     function attempt() {
       if (window.__APP_READY__) { markReady(); return; }
-      if (index >= steps.length) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+      if (index >= steps.length) { runLocalFetchThenStub(); return; }
       var step = steps[index++];
       if (step.cache) {
         write("warn", "Резервный JS из localStorage");
-        injectJsFromText(step.cache);
+        injectJsFromText(step.cache, "localStorage");
       } else {
         injectJsUrl(step.url);
       }
@@ -560,6 +605,26 @@
     write("error", "Необработанный отказ: " + msg);
   }
 
+  // Resource Timing: показывает, был ли запрос ресурса вообще и чем закончился,
+  // даже если браузер не прислал load/error у тега <script>.
+  function dumpResourceTiming() {
+    try {
+      if (!window.performance || !window.performance.getEntriesByType) return;
+      var list = window.performance.getEntriesByType("resource") || [];
+      var found = false;
+      for (var i = 0; i < list.length; i++) {
+        var e = list[i];
+        if (!e || !e.name || (e.name.indexOf("app-") === -1 && e.name.indexOf("shell-config") === -1)) continue;
+        found = true;
+        var dur = Math.round(e.duration || 0);
+        var size = e.transferSize != null ? e.transferSize : "?";
+        var status = e.responseStatus != null ? e.responseStatus : "?";
+        write("info", "Ресурс " + baseName(e.name) + ": статус " + status + ", " + size + " байт, " + dur + "мс");
+      }
+      if (!found) write("warn", "Бандл не найден в Resource Timing (запрос не сделан или не завершился)");
+    } catch (e) {}
+  }
+
   /* ---- переключатель лога ---- */
 
   var logOpenedByUser = false;
@@ -604,9 +669,22 @@
 
     startReadyPoll();
 
+    // Ранний детектор «тихой» блокировки: если у тега бандла не было ни load,
+    // ни error за EARLY_FALLBACK мс — считаем ресурс заблокированным и сразу
+    // запускаем резерв (fetch+инлайн), не дожидаясь основного таймаута.
+    earlyTimer = setTimeout(function () {
+      earlyTimer = null;
+      if (window.__APP_READY__) return;
+      if (!window.__VK_SHELL_SCRIPT_LOADED__ && !window.__VK_SHELL_SCRIPT_ERRORED__) {
+        write("warn", "Бандл не подал ни load, ни error за " + EARLY_FALLBACK + "мс — похоже на блокировку загрузки скрипта");
+        startFallback("js");
+      }
+    }, EARLY_FALLBACK);
+
     primaryTimer = setTimeout(function () {
       if (!window.__APP_READY__) {
         write("warn", "Основной JS не запустился за " + PRIMARY_TIMEOUT + "мс");
+        dumpResourceTiming();
         startFallback("js");
       }
     }, PRIMARY_TIMEOUT);
@@ -619,6 +697,8 @@
   init();
 })();
 </script>
-    <script src="./assets/app-Bw4c7E5-.js"></script>
+    <script id="app-bundle" src="./assets/app-Bw4c7E5-.js"
+      onload="window.__VK_SHELL_SCRIPT_LOADED__=true;window.__VK_LOADER__&&window.__VK_LOADER__.ok('Событие load у бандла')"
+      onerror="window.__VK_SHELL_SCRIPT_ERRORED__=true;window.__VK_LOADER__&&window.__VK_LOADER__.error('Событие error у бандла')"></script>
   </body>
 </html>

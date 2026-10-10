@@ -49,6 +49,8 @@ const configInline = `window.__VK_SHELL_CONFIG__ = {
   timeoutMs: 8000,
   primaryTimeoutMs: 6000,
   fallbackGraceMs: 4000,
+  postInjectTimeoutMs: 4000,
+  earlyFallbackMs: 1500,
   readyWatchdogMs: 20000
 };`;
 
@@ -133,7 +135,9 @@ const shellHtml = `<!doctype html>
     <noscript>Для работы интерфейса нужен включённый JavaScript.</noscript>
     <script src="./shell-config.js"></script>
     <script>${runtime}</script>
-    <script src="./assets/${jsName}"></script>
+    <script id="app-bundle" src="./assets/${jsName}"
+      onload="window.__VK_SHELL_SCRIPT_LOADED__=true;window.__VK_LOADER__&&window.__VK_LOADER__.ok('Событие load у бандла')"
+      onerror="window.__VK_SHELL_SCRIPT_ERRORED__=true;window.__VK_LOADER__&&window.__VK_LOADER__.error('Событие error у бандла')"></script>
   </body>
 </html>
 `;
