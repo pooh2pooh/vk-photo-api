@@ -328,6 +328,112 @@ function action_photos(array $s): void
     json_out($result);
 }
 
+/* ---------------------------------------------------------------- static assets */
+
+/*
+ * Отдаём собранные assets/app-*.js|css через PHP, а не статикой.
+ * Причина: в Яндекс.Браузере прямой запрос к статическому ./assets/app-*.js
+ * может «зависать» (ни ответа, ни ошибки), тогда как ответ PHP с корректными
+ * заголовками и gzip отдаётся нормально. Явно задаём Content-Length,
+ * Content-Type, gzip и запрещаем любую «трансформацию» ответа.
+ */
+function action_asset(): never
+{
+    @ini_set('zlib.output_compression', '0');
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    $name = (string) ($_GET['f'] ?? '');
+    if (preg_match('/^app-[A-Za-z0-9._-]+\.(js|css)$/', $name) !== 1) {
+        fail(400, 'BAD_ASSET', 'Недопустимое имя файла');
+    }
+
+    $assetsDir = realpath(__DIR__ . '/assets');
+    $real = realpath(__DIR__ . '/assets/' . $name);
+    if ($assetsDir === false || $real === false || strpos($real, $assetsDir . DIRECTORY_SEPARATOR) !== 0 || !is_file($real)) {
+        fail(404, 'ASSET_NOT_FOUND', 'Файл не найден');
+    }
+
+    $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    $contentType = $ext === 'css'
+        ? 'text/css; charset=utf-8'
+        : 'application/javascript; charset=utf-8';
+
+    $body = (string) file_get_contents($real);
+    $etag = '"' . sha1_file($real) . '"';
+
+    header('Content-Type: ' . $contentType);
+    header('Cache-Control: public, max-age=31536000, immutable, no-transform');
+    header('X-Content-Type-Options: nosniff');
+    header('Vary: Accept-Encoding');
+    header('ETag: ' . $etag);
+
+    if (trim((string) ($_SERVER['HTTP_IF_NONE_MATCH'] ?? '')) === $etag) {
+        http_response_code(304);
+        exit;
+    }
+
+    $acceptsGzip = stripos((string) ($_SERVER['HTTP_ACCEPT_ENCODING'] ?? ''), 'gzip') !== false;
+    if ($acceptsGzip && function_exists('gzencode')) {
+        $cacheDir = __DIR__ . '/private/asset-cache';
+        $gzPath = $cacheDir . '/' . $name . '.gz';
+        if (!is_file($gzPath)) {
+            if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0775, true) && !is_dir($cacheDir)) {
+                // не смогли подготовить кэш — отдадим как есть
+            } else {
+                @file_put_contents($gzPath, gzencode($body, 9), LOCK_EX);
+            }
+        }
+        if (is_file($gzPath)) {
+            $body = (string) file_get_contents($gzPath);
+            header('Content-Encoding: gzip');
+        }
+    }
+
+    header('Content-Length: ' . strlen($body));
+    echo $body;
+    exit;
+}
+
+/* ---------------------------------------------------------------- diagnostics */
+
+/*
+ * Приём диагностики от загрузчика (User-Agent, лог, Resource Timing).
+ * Файлы пишутся в private/diag/ (закрыт .htaccess). Нужен, чтобы понять,
+ * что именно происходит в Яндекс.Браузере, без DevTools на стороне клиента.
+ */
+function action_diag(): never
+{
+    $raw = (string) file_get_contents('php://input');
+    if (strlen($raw) > 262144) {
+        $raw = substr($raw, 0, 262144);
+    }
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        $data = ['raw' => $raw];
+    }
+    $data['_server'] = [
+        'time'            => date('c'),
+        'ip'              => $_SERVER['REMOTE_ADDR'] ?? null,
+        'user_agent'      => $_SERVER['HTTP_USER_AGENT'] ?? null,
+        'accept_encoding' => $_SERVER['HTTP_ACCEPT_ENCODING'] ?? null,
+        'http_version'    => $_SERVER['SERVER_PROTOCOL'] ?? null,
+    ];
+
+    $dir = __DIR__ . '/private/diag';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        json_out(['ok' => false, 'error' => 'no_dir']);
+    }
+    $file = date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.json';
+    @file_put_contents(
+        $dir . '/' . $file,
+        json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT),
+        LOCK_EX,
+    );
+    json_out(['ok' => true, 'file' => $file]);
+}
+
 /* ---------------------------------------------------------------- router */
 
 $secrets = load_secrets();
@@ -339,6 +445,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 try {
     switch ($action) {
+        case 'asset':
+            action_asset();
+        case 'diag':
+            action_diag();
         case 'session':
             action_session($secrets);
         case 'login':

@@ -11,8 +11,9 @@
     "dev:web": "npm run dev --workspace web",
     "dev:php": "php -S 127.0.0.1:8090",
     "dev": "npm run dev:web",
-    "build": "npm run build --workspace server && npm run build --workspace web && npm run build:shell",
+    "build": "npm run build --workspace server && npm run build --workspace web && npm run build:icons && npm run build:shell",
     "build:web": "npm run build --workspace web",
+    "build:icons": "bash scripts/make-icons.sh",
     "build:shell": "node scripts/build-shell.mjs",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
     "start": "npm run start --workspace server"

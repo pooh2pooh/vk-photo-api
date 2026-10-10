@@ -1,16 +1,19 @@
 /* Отказоустойчивый загрузчик интерфейса + встроенный терминальный лог.
  *
- * Основной бандл — классический IIFE, подключается обычным
- * <script src="./assets/app-<hash>.js"> прямо в index.html (самый совместимый
- * способ, работает во всех браузерах, включая Яндекс.Браузер). Этот скрипт:
+ * Основной бандл (IIFE) в index.html тегом НЕ прописан: загрузчик сам
+ * подключает его, сперва через PHP-ручку api.php?action=asset (gzip, точный
+ * Content-Length), затем статикой ./assets/app-<hash>.js, копией из
+ * localStorage, CDN-зеркалами и, наконец, через fetch + инлайн-инъекцию.
+ * Это обходит браузеры/прокси, которые «вешают» крупный внешний <script>.
+ * Этот скрипт:
  *   1) держит единственный постоянный оверлей со спиннером (без перерисовки);
  *   2) ведёт цветной терминальный лог с таймингами (жизненный цикл, запросы,
  *      ответы, ошибки) и отдаёт его наружу через window.__VK_LOADER__;
  *   3) ждёт готовности приложения по флагу window.__APP_READY__ и плавно
  *      скрывает оверлей (CSS opacity/visibility);
- *   4) если основной бандл не запустился — перебирает резервные источники:
- *      копию из localStorage → CDN-зеркала → те же зеркала через прокси;
- *   5) при полном отказе показывает понятную заглушку (без «вечной загрузки»).
+ *   4) если основной источник не запустился — перебирает резервные источники;
+ *   5) при полном отказе показывает понятную заглушку (без «вечной загрузки»);
+ *   6) шлёт маячок диагностики (лог + Resource Timing) на api.php?action=diag.
  */
 (function () {
   "use strict";
@@ -18,9 +21,8 @@
   var CONFIG = window.__VK_SHELL_CONFIG__ || {};
   var JS = CONFIG.js || "./assets/app.js";
   var CSS = CONFIG.css || "./assets/app.css";
-  // jsInline: бандл уже встроен в HTML (см. scripts/build-shell.mjs). Тогда
-  // внешний запрос не нужен и не делается — это обходит браузеры/прокси,
-  // которые «вешают» загрузку отдельного файла .js.
+  // jsInline: устаревший режим, когда бандл встраивали прямо в HTML. Сейчас
+  // сборка использует внешние источники; флаг оставлен для совместимости.
   var JS_INLINE = !!CONFIG.jsInline;
   var TIMEOUT = CONFIG.timeoutMs || 8000;
   var PRIMARY_TIMEOUT = CONFIG.primaryTimeoutMs || 6000;
@@ -35,6 +37,20 @@
 
   var JS_BASE = baseName(JS);
   var CSS_BASE = baseName(CSS);
+
+  // Отдача тех же файлов через PHP (api.php?action=asset&f=...): загрузчик
+  // подставляет это первым резервом. В Яндекс.Браузере ответ PHP с gzip и
+  // корректным Content-Length отдаётся нормально, тогда как статический
+  // ./assets/*.js может «зависать» навсегда.
+  var ASSET = CONFIG.asset || "";
+  var DIAG_URL = CONFIG.diag || "./api.php?action=diag";
+  function assetUrl(base) {
+    if (!ASSET || !base) return "";
+    return ASSET + (ASSET.indexOf("?") === -1 ? "?" : "&") + "f=" + encodeURIComponent(base);
+  }
+  var JS_ASSET = assetUrl(JS_BASE);
+  var CSS_ASSET = assetUrl(CSS_BASE);
+  var reported = false;
 
   var MAX_LOG_LINES = 300;
   var LOG_AUTOHIDE_MS = 1600;
@@ -104,6 +120,14 @@
   /* ---- терминальный лог ---- */
 
   var logEl = null;
+  var logLines = [];
+
+  function record(line) {
+    try {
+      logLines.push(line);
+      if (logLines.length > 500) logLines.shift();
+    } catch (e) {}
+  }
 
   function ensureLog() {
     if (logEl) return logEl;
@@ -122,13 +146,15 @@
 
   function write(level, message) {
     var line = String(message == null ? "" : message);
+    var stamped = stamp() + " " + line;
+    record(stamped);
     try {
       var box = ensureLog();
       if (box) {
         var node = el("div");
         if (node) {
           node.className = "shell-log__line shell-log__line--" + level;
-          node.textContent = stamp() + " " + line;
+          node.textContent = stamped;
           box.appendChild(node);
           while (box.childNodes && box.childNodes.length > MAX_LOG_LINES) {
             box.removeChild(box.firstChild);
@@ -190,6 +216,20 @@
       var box = ensureLog();
       if (box) while (box.firstChild) box.removeChild(box.firstChild);
     },
+    restart: function () {
+      try { loader.clear(); } catch (e) {}
+      logLines = [];
+      try { setHidden($("shell-fallback"), true); } catch (e) {}
+      try { setHidden($("shell-overlay"), false); } catch (e) {}
+      try { bootBusy(true); } catch (e) {}
+      write("info", "Перезапуск загрузки…");
+      try {
+        if (typeof location !== "undefined" && typeof location.reload === "function") {
+          location.reload();
+        }
+      } catch (e) {}
+    },
+    report: function () { sendDiag("manual"); },
     isReady: function () { return ready; },
   };
   try {
@@ -223,6 +263,7 @@
       if (!logOpenedByUser) setLogVisible(false);
     }, LOG_AUTOHIDE_MS);
     cachePrimary();
+    sendDiag("ready");
   }
 
   function startReadyPoll() {
@@ -245,6 +286,7 @@
     var detail = $("shell-fallback-detail");
     if (detail) detail.textContent = code || "";
     setHidden($("shell-fallback"), false);
+    sendDiag("fallback:" + (code || ""));
   }
 
   function scheduleFallback(code) {
@@ -381,7 +423,7 @@
     if (!s) return null;
     s.src = url;
     mountPoint().appendChild(s);
-    write("net", "Резервный JS: " + url);
+    write("net", "Подключаю JS: " + url);
     return s;
   }
 
@@ -441,49 +483,64 @@
 
   // Последний резерв: забрать бандл через fetch и выполнить инлайн.
   // Работает, когда статический <script> блокируется молча (без load/error).
+  // Сначала пробуем ответ PHP (gzip, маленький по проводу), затем статику.
   function runLocalFetchThenStub() {
     if (typeof fetch !== "function") { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
 
+    var candidates = [];
+    if (JS_ASSET) candidates.push(JS_ASSET);
+    candidates.push(JS);
+
     // HEAD-проба: проверяет, отвечает ли сервер вообще (без тела).
-    fetchWithTimeout(JS, { method: "HEAD", credentials: "same-origin", cache: "no-store" }, TIMEOUT)
-      .then(function (r) { write("ok", "HEAD " + JS + " → " + r.status + " " + headerSummary(r)); })
+    fetchWithTimeout(candidates[0], { method: "HEAD", credentials: "same-origin", cache: "no-store" }, TIMEOUT)
+      .then(function (r) { write("ok", "HEAD " + candidates[0] + " → " + r.status + " " + headerSummary(r)); })
       .catch(function (e) { write("warn", "HEAD не удался (сервер не отвечает): " + (e && e.message)); });
 
-    var url = withCacheBuster(JS);
-    write("net", "Резервный fetch " + url);
-    var started = now();
-    fetchWithTimeout(url, { credentials: "same-origin", cache: "no-store" }, TIMEOUT)
-      .then(function (r) {
-        var ms = Math.round(now() - started);
-        write(r.ok ? "ok" : "error", "GET " + JS + " → " + r.status + " " + headerSummary(r) + " " + ms + "мс");
-        if (!r.ok) return null;
-        return r.text();
-      })
-      .then(function (t) {
-        if (!t) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
-        write("info", "fetch: получено " + t.length + " байт");
-        if (/^\s*</.test(t)) {
-          write("error", "fetch: ответ похож на HTML, а не на JS");
-          scheduleFallback("RESOURCES_UNAVAILABLE");
-          return;
-        }
-        write("warn", "Выполняю инлайн-инъекцию бандла");
-        injectJsFromText(t, "fetch");
-        var deadline = now() + POST_INJECT_TIMEOUT;
-        (function check() {
-          if (window.__APP_READY__) { markReady(); return; }
-          if (now() >= deadline) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
-          setTimeout(check, 100);
-        })();
-      })
-      .catch(function (e) {
-        write("error", "fetch не удался: " + (e && (e.message || e)));
-        scheduleFallback("RESOURCES_UNAVAILABLE");
-      });
+    var index = 0;
+    function next() {
+      if (window.__APP_READY__) { markReady(); return; }
+      if (index >= candidates.length) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+      var base = candidates[index++];
+      var url = withCacheBuster(base);
+      write("net", "Резервный fetch " + url);
+      var started = now();
+      fetchWithTimeout(url, { credentials: "same-origin", cache: "no-store" }, TIMEOUT)
+        .then(function (r) {
+          var ms = Math.round(now() - started);
+          write(r.ok ? "ok" : "error", "GET " + base + " → " + r.status + " " + headerSummary(r) + " " + ms + "мс");
+          if (!r.ok) return null;
+          return r.text();
+        })
+        .then(function (t) {
+          if (!t) { next(); return; }
+          write("info", "fetch: получено " + t.length + " байт");
+          if (/^\s*</.test(t)) {
+            write("error", "fetch: ответ похож на HTML, а не на JS");
+            next();
+            return;
+          }
+          write("warn", "Выполняю инлайн-инъекцию бандла");
+          injectJsFromText(t, "fetch");
+          var deadline = now() + POST_INJECT_TIMEOUT;
+          (function check() {
+            if (window.__APP_READY__) { markReady(); return; }
+            if (now() >= deadline) { next(); return; }
+            setTimeout(check, 100);
+          })();
+        })
+        .catch(function (e) {
+          write("error", "fetch не удался: " + (e && (e.message || e)));
+          next();
+        });
+    }
+    next();
   }
 
   function runJsFallback() {
     var steps = [];
+    // Основной источник (JS_ASSET или JS) уже пробовали при старте — берём
+    // «второй» источник, затем копию из localStorage, затем CDN-зеркала.
+    if (JS_ASSET && JS) steps.push({ url: JS, label: "static" });
     var cached = lsGet(JS_KEY);
     if (cached) steps.push({ cache: cached });
     var urls = mirrorChain("js");
@@ -500,6 +557,7 @@
         write("warn", "Резервный JS из localStorage");
         injectJsFromText(step.cache, "localStorage");
       } else {
+        if (step.label === "static") write("warn", "Резервный JS статикой: " + step.url);
         injectJsUrl(step.url);
       }
       setTimeout(function () {
@@ -513,7 +571,9 @@
   function runCssFallback() {
     var cached = lsGet(CSS_KEY);
     if (cached) { write("warn", "Резервный CSS из localStorage"); injectCssFromText(cached); }
-    var urls = mirrorChain("css");
+    var urls = [];
+    if (CSS_ASSET) urls.push(CSS_ASSET);
+    urls = urls.concat(mirrorChain("css"));
     var index = 0;
     function attempt() {
       if (index >= urls.length) return;
@@ -544,10 +604,11 @@
       var url = target.src || target.href || "";
       if (typeof url !== "string") return;
       var base = baseName(url);
-      if (base === JS_BASE || /(^|\/)app-[^/]+\.js$/i.test(base)) {
+      var isAsset = url.indexOf("action=asset") !== -1 && url.indexOf("app-") !== -1;
+      if (base === JS_BASE || /(^|\/)app-[^/]+\.js$/i.test(base) || (isAsset && /\.js(\?|$)/i.test(url))) {
         write("error", "Не загрузился основной JS: " + url);
         startFallback("js");
-      } else if (base === CSS_BASE || /(^|\/)app-[^/]+\.css$/i.test(base)) {
+      } else if (base === CSS_BASE || /(^|\/)app-[^/]+\.css$/i.test(base) || (isAsset && /\.css(\?|$)/i.test(url))) {
         write("error", "Не загрузился основной CSS: " + url);
         startFallback("css");
       }
@@ -586,8 +647,89 @@
     } catch (e) {}
   }
 
-  /* ---- переключатель лога ---- */
+  function collectResourceTiming() {
+    var out = [];
+    try {
+      if (!window.performance || !window.performance.getEntriesByType) return out;
+      var list = window.performance.getEntriesByType("resource") || [];
+      for (var i = 0; i < list.length; i++) {
+        var e = list[i];
+        if (!e || !e.name) continue;
+        if (e.name.indexOf("app-") === -1 && e.name.indexOf("api.php") === -1 && e.name.indexOf("shell-config") === -1) continue;
+        out.push({
+          name: e.name,
+          initiatorType: e.initiatorType || "",
+          duration: Math.round(e.duration || 0),
+          transferSize: e.transferSize != null ? e.transferSize : null,
+          encodedBodySize: e.encodedBodySize != null ? e.encodedBodySize : null,
+          decodedBodySize: e.decodedBodySize != null ? e.decodedBodySize : null,
+          responseStatus: e.responseStatus != null ? e.responseStatus : null,
+        });
+      }
+    } catch (e) {}
+    return out;
+  }
 
+  function collectNavigation() {
+    try {
+      if (!window.performance || !window.performance.getEntriesByType) return null;
+      var nav = (window.performance.getEntriesByType("navigation") || [])[0];
+      if (!nav) return null;
+      return {
+        type: nav.type || "",
+        duration: Math.round(nav.duration || 0),
+        transferSize: nav.transferSize != null ? nav.transferSize : null,
+        encodedBodySize: nav.encodedBodySize != null ? nav.encodedBodySize : null,
+        decodedBodySize: nav.decodedBodySize != null ? nav.decodedBodySize : null,
+        domContentLoaded: Math.round(nav.domContentLoadedEventEnd || 0),
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Маячок диагностики: отправляем лог и тайминги на сервер (private/diag/),
+  // чтобы понять поведение Яндекс.Браузера без DevTools на стороне клиента.
+  function sendDiag(reason) {
+    if (reported) return;
+    reported = true;
+    var payload;
+    try {
+      payload = JSON.stringify({
+        reason: reason,
+        version: loader.version,
+        href: (typeof location !== "undefined" && location.href) ? location.href : "",
+        userAgent: (typeof navigator !== "undefined" && navigator.userAgent) ? navigator.userAgent : "",
+        ready: !!window.__APP_READY__,
+        mounted: !!window.__VK_APP_MOUNTED__,
+        config: { js: JS, css: CSS, asset: ASSET },
+        log: logLines.slice(),
+        resourceTiming: collectResourceTiming(),
+        navigation: collectNavigation(),
+      });
+    } catch (e) {
+      return;
+    }
+    try {
+      if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+        var ok = navigator.sendBeacon(DIAG_URL, payload);
+        if (ok) return;
+      }
+    } catch (e) {}
+    try {
+      if (typeof fetch === "function") {
+        fetch(DIAG_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          keepalive: true,
+          credentials: "omit",
+        }).catch(function () {});
+      }
+    } catch (e) {}
+  }
+
+  /* ---- переключатель лога ---- */
   var logOpenedByUser = false;
 
   function wireToggle() {
@@ -639,17 +781,11 @@
       return;
     }
 
-    // Ранний детектор «тихой» блокировки: если у тега бандла не было ни load,
-    // ни error за EARLY_FALLBACK мс — считаем ресурс заблокированным и сразу
-    // запускаем резерв (fetch+инлайн), не дожидаясь основного таймаута.
-    earlyTimer = setTimeout(function () {
-      earlyTimer = null;
-      if (window.__APP_READY__) return;
-      if (!window.__VK_SHELL_SCRIPT_LOADED__ && !window.__VK_SHELL_SCRIPT_ERRORED__) {
-        write("warn", "Бандл не подал ни load, ни error за " + EARLY_FALLBACK + "мс — похоже на блокировку загрузки скрипта");
-        startFallback("js");
-      }
-    }, EARLY_FALLBACK);
+    // Основной источник грузим сами: сначала PHP-ассет (gzip), иначе статику.
+    // Так в HTML нет подвисшего <script src>, который держит событие load.
+    var primaryUrl = JS_ASSET || JS;
+    write("net", "Загрузка бандла: " + primaryUrl);
+    injectJsUrl(primaryUrl);
 
     primaryTimer = setTimeout(function () {
       if (!window.__APP_READY__) {

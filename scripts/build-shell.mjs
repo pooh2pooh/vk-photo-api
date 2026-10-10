@@ -2,12 +2,15 @@
  * превращает индексный index.html в отказоустойчивый загрузчик.
  *
  * Ассеты ищем сканированием каталога assets/ (не полагаемся на разметку
- * index.html), основной бандл подключаем классическим <script> — сборка идёт
- * в формате IIFE, это самый совместимый способ для старых движков.
+ * index.html). Основной бандл НЕ прописан тегом в HTML: загрузчик сам
+ * подгружает его, сперва через PHP-ручку api.php?action=asset (gzip, ~62 КБ
+ * по проводу), затем статикой, затем копиями из localStorage, зеркал и,
+ * наконец, через fetch + инлайн-инъекцию. Так в разметке нет подвисшего
+ * <script src>, который в Яндекс.Браузере держит событие load вечно.
  * Источники зеркал перечисляются в web/shell-config.js, его копия ложится
  * рядом с index.html уже на сервере.
  */
-import { readFileSync, writeFileSync, readdirSync, unlinkSync, copyFileSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, unlinkSync, copyFileSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,27 +46,41 @@ const title = titleMatch ? titleMatch[1] : "Фото ВК";
 
 const runtime = readFileSync(path.join(webDir, "shell-runtime.js"), "utf8");
 
-// Бандл встраиваем прямо в HTML: в Яндекс.Браузере отдельный запрос к
-// ./assets/app-*.js может «зависать» навсегда (ни load, ни error), а разметка
-// index.html при этом грузится нормально. Инлайн убирает этот запрос целиком.
-// Комментарий sourceMappingURL вырезаем (в инлайне относительный путь к .map
-// резолвится от index.html и даёт 404), последовательность </script> экранируем.
-const jsCode = readFileSync(path.join(assetsDir, jsName), "utf8");
-const jsInline = jsCode
-  .replace(/\/\/# sourceMappingURL=.*$/m, "")
-  .replace(/<\/script/gi, "<\\/script");
+// PHP-ручки: gzip-отдача ассета и приём диагностики. Если api.php нет рядом
+// с index.html (чисто статический деплой) — загрузчик просто сразу уйдёт на
+// статику и зеркала.
+const hasApi = existsSync(path.join(root, "api.php"));
+const assetEndpoint = hasApi ? "./api.php?action=asset" : "";
+const diagEndpoint = hasApi ? "./api.php?action=diag" : "";
 
 const configInline = `window.__VK_SHELL_CONFIG__ = {
   js: "./assets/${jsName}",
   css: "./assets/${cssName}",
-  jsInline: true,
+  asset: ${JSON.stringify(assetEndpoint)},
+  diag: ${JSON.stringify(diagEndpoint)},
   timeoutMs: 8000,
   primaryTimeoutMs: 6000,
   fallbackGraceMs: 4000,
   postInjectTimeoutMs: 4000,
-  earlyFallbackMs: 1500,
   readyWatchdogMs: 20000
 };`;
+
+// Фавиконки/иконки кладём в корень (см. scripts/make-icons.sh), ссылки даём
+// только на существующие файлы, чтобы не ловить 404.
+const icons = {
+  svg: existsSync(path.join(root, "icon.svg")),
+  ico: existsSync(path.join(root, "favicon.ico")),
+  apple: existsSync(path.join(root, "apple-touch-icon.png")),
+  manifest: existsSync(path.join(root, "site.webmanifest")),
+};
+const iconLinks = [
+  icons.svg ? `    <link rel="icon" type="image/svg+xml" href="./icon.svg" />` : "",
+  icons.ico ? `    <link rel="icon" href="./favicon.ico" sizes="any" />` : "",
+  icons.apple ? `    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />` : "",
+  icons.manifest ? `    <link rel="manifest" href="./site.webmanifest" />` : "",
+]
+  .filter(Boolean)
+  .join("\n");
 
 const shellHtml = `<!doctype html>
 <html lang="ru">
@@ -71,6 +88,8 @@ const shellHtml = `<!doctype html>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${title}</title>
+${iconLinks}
+    <meta name="theme-color" content="#0f1115" />
     <style>
       html, body { margin: 0; height: 100%; background: #0f1115; }
       body.shell-busy, body.shell-busy * { cursor: progress !important; }
@@ -140,13 +159,12 @@ const shellHtml = `<!doctype html>
       <div class="card">
         <p>Интерфейс не удалось загрузить ни из локальных копий, ни из CDN-зеркал.</p>
         <p><code id="shell-fallback-detail"></code></p>
-        <p><button class="shell-btn" onclick="location.reload()">Повторить</button></p>
+        <p><button class="shell-btn" type="button" onclick="var L=window.__VK_LOADER__;if(L&&L.restart){L.restart();}else{location.reload();}">Повторить</button></p>
       </div>
     </div>
     <noscript>Для работы интерфейса нужен включённый JavaScript.</noscript>
     <script src="./shell-config.js"></script>
     <script>${runtime}</script>
-    <script id="app-bundle" data-source="inline">${jsInline}</script>
   </body>
 </html>
 `;

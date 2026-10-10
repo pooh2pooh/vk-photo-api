@@ -1,0 +1,66 @@
+{
+    "reason": "ready",
+    "version": "2",
+    "href": "http://127.0.0.1:8090/index.html",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "ready": true,
+    "mounted": true,
+    "config": {
+        "js": "./assets/app-Bw4c7E5-.js",
+        "css": "./assets/app-Dt0Dl7z8.css",
+        "asset": "./api.php?action=asset"
+    },
+    "log": [
+        "[  1ms] Загрузчик v2 запущен",
+        "[ 79ms] Основной бандл: ./assets/app-Bw4c7E5-.js",
+        "[ 80ms] Загрузка бандла: ./api.php?action=asset&f=app-Bw4c7E5-.js",
+        "[ 81ms] Подключаю JS: ./api.php?action=asset&f=app-Bw4c7E5-.js",
+        "[107ms] → GET session",
+        "[109ms] Интерфейс готов",
+        "[110ms] Кэширование бандла для офлайна"
+    ],
+    "resourceTiming": [
+        {
+            "name": "http://127.0.0.1:8090/assets/app-Dt0Dl7z8.css",
+            "initiatorType": "link",
+            "duration": 10,
+            "transferSize": 7634,
+            "encodedBodySize": 7334,
+            "decodedBodySize": 7334,
+            "responseStatus": 200
+        },
+        {
+            "name": "http://127.0.0.1:8090/shell-config.js",
+            "initiatorType": "script",
+            "duration": 11,
+            "transferSize": 2226,
+            "encodedBodySize": 1926,
+            "decodedBodySize": 1926,
+            "responseStatus": 200
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "script",
+            "duration": 4,
+            "transferSize": 61981,
+            "encodedBodySize": 61681,
+            "decodedBodySize": 193346,
+            "responseStatus": 200
+        }
+    ],
+    "navigation": {
+        "type": "navigate",
+        "duration": 0,
+        "transferSize": 33982,
+        "encodedBodySize": 33682,
+        "decodedBodySize": 33682,
+        "domContentLoaded": 24790
+    },
+    "_server": {
+        "time": "2026-10-10T19:45:28+00:00",
+        "ip": "127.0.0.1",
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+        "accept_encoding": "gzip, deflate, br, zstd",
+        "http_version": "HTTP/1.1"
+    }
+}
