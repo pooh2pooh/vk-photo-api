@@ -64,9 +64,9 @@ const configInline = `window.__VK_SHELL_CONFIG__ = {
   postInjectTimeoutMs: 4000,
   readyWatchdogMs: 20000,
   rangeChunkBytes: 8192,
-  rangePool: 4,
-  rangeTimeoutMs: 4000,
-  rangeRetries: 3,
+  rangePool: 6,
+  rangeTimeoutMs: 3500,
+  rangeRetries: 5,
   rangeRetryDelayMs: 150
 };`;
 

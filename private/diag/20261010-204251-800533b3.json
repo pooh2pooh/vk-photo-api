@@ -1,0 +1,275 @@
+{
+    "reason": "ready",
+    "version": "2",
+    "href": "http://127.0.0.1:8090/index.html",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0) YaBrowser/24.7 Chrome/126.0 Safari/537.36",
+    "ready": true,
+    "mounted": true,
+    "config": {
+        "js": "./assets/app-Bw4c7E5-.js",
+        "css": "./assets/app-Dt0Dl7z8.css",
+        "asset": "./api.php?action=asset"
+    },
+    "log": [
+        "[  1ms] Загрузчик v2 запущен",
+        "[101ms] Основной бандл: ./assets/app-Bw4c7E5-.js",
+        "[103ms] Яндекс.Браузер: заряжаю бандл Range-кусками вместо целого тела",
+        "[103ms] Скачиваю бандл диапазонами: ./api.php?action=asset&f=app-Bw4c7E5-.js",
+        "[167ms] Диапазоны: собрано 192675 байт",
+        "[167ms] Выполняю бандл диапазонов инлайн",
+        "[177ms] → GET session",
+        "[177ms] Интерфейс готов",
+        "[177ms] Кэширование бандла для офлайна"
+    ],
+    "resourceTiming": [
+        {
+            "name": "http://127.0.0.1:8090/assets/app-Dt0Dl7z8.css",
+            "initiatorType": "link",
+            "duration": 8,
+            "transferSize": 7634,
+            "encodedBodySize": 7334,
+            "decodedBodySize": 7334,
+            "responseStatus": 200
+        },
+        {
+            "name": "http://127.0.0.1:8090/shell-config.js",
+            "initiatorType": "script",
+            "duration": 8,
+            "transferSize": 2226,
+            "encodedBodySize": 1926,
+            "decodedBodySize": 1926,
+            "responseStatus": 200
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 10,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 2,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 5,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 6,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 7,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 8,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 8,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 0,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 1,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 2,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 2,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": 2,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -6,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -5,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -4,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -3,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -10,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -9,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -8,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -7,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -7,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -6,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -14,
+            "transferSize": 8492,
+            "encodedBodySize": 8192,
+            "decodedBodySize": 8192,
+            "responseStatus": 206
+        },
+        {
+            "name": "http://127.0.0.1:8090/api.php?action=asset&f=app-Bw4c7E5-.js",
+            "initiatorType": "fetch",
+            "duration": -13,
+            "transferSize": 5230,
+            "encodedBodySize": 4930,
+            "decodedBodySize": 4930,
+            "responseStatus": 206
+        }
+    ],
+    "navigation": {
+        "type": "navigate",
+        "duration": 24857,
+        "transferSize": 45717,
+        "encodedBodySize": 45417,
+        "decodedBodySize": 45417,
+        "domContentLoaded": 24856
+    },
+    "_server": {
+        "time": "2026-10-10T20:42:51+00:00",
+        "ip": "127.0.0.1",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0) YaBrowser/24.7 Chrome/126.0 Safari/537.36",
+        "accept_encoding": "gzip, deflate, br, zstd",
+        "http_version": "HTTP/1.1"
+    }
+}

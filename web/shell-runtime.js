@@ -31,9 +31,9 @@
   var POST_INJECT_TIMEOUT = CONFIG.postInjectTimeoutMs || 4000;
   var EARLY_FALLBACK = CONFIG.earlyFallbackMs || 1500;
   var RANGE_CHUNK = CONFIG.rangeChunkBytes || 8192;
-  var RANGE_POOL = CONFIG.rangePool || 4;
-  var RANGE_TIMEOUT = CONFIG.rangeTimeoutMs || 4000;
-  var RANGE_RETRIES = CONFIG.rangeRetries || 3;
+  var RANGE_POOL = CONFIG.rangePool || 6;
+  var RANGE_TIMEOUT = CONFIG.rangeTimeoutMs || 3500;
+  var RANGE_RETRIES = CONFIG.rangeRetries || 5;
   var RANGE_RETRY_DELAY = CONFIG.rangeRetryDelayMs || 150;
   var MIRRORS = window.__VK_SHELL_MIRRORS__ || {};
   var JS_MIRRORS = MIRRORS.js || [];
@@ -71,6 +71,21 @@
   var finalTimer = null;
   var fallbackTimer = null;
   var logHideTimer = null;
+  var rangeWatchdog = null;
+  var rangeActive = false;
+
+  /* ---- сторож Range-загрузки: взводится заново на каждом докачанном куске ---- */
+
+  function armRangeWatchdog() {
+    if (!rangeActive || ready) return;
+    if (rangeWatchdog) { clearTimeout(rangeWatchdog); rangeWatchdog = null; }
+    rangeWatchdog = setTimeout(function () {
+      if (ready) return;
+      write("warn", "Диапазоны: нет прогресса " + READY_WATCHDOG + "мс, останавливаю загрузку");
+      rangeActive = false;
+      scheduleFallback("APP_TIMEOUT");
+    }, READY_WATCHDOG);
+  }
 
   /* ---- время ---- */
 
@@ -248,6 +263,7 @@
     if (primaryTimer) { clearTimeout(primaryTimer); primaryTimer = null; }
     if (earlyTimer) { clearTimeout(earlyTimer); earlyTimer = null; }
     if (finalTimer) { clearTimeout(finalTimer); finalTimer = null; }
+    if (rangeWatchdog) { clearTimeout(rangeWatchdog); rangeWatchdog = null; }
     if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
   }
 
@@ -550,9 +566,8 @@
     chunkSize = chunkSize || RANGE_CHUNK;
     poolSize = poolSize || RANGE_POOL;
 
-    // Один кусок с ретраями: короткий таймаут, при сбое — повторить попозже.
-    function fetchChunk(ret, retriesLeft, codeHolder) {
-      retriesLeft = retriesLeft == null ? RANGE_RETRIES : retriesLeft;
+    // Один запрос куска: короткий таймаут RANGE_TIMEOUT, raw-байты из Range.
+    function fetchChunkOnce(ret, codeHolder) {
       return fetchWithTimeout(url, {
         credentials: "same-origin",
         cache: "no-store",
@@ -576,17 +591,23 @@
           }
           if (meta.total != null) ret.total = meta.total;
           return readBody(r, RANGE_TIMEOUT).then(function (t) {
+            armRangeWatchdog();
             return { text: t, total: ret.total };
           });
-        })
-        .catch(function (e) {
-          if (retriesLeft > 0) {
-            return delay(RANGE_RETRY_DELAY).then(function () {
-              return fetchChunk(ret, retriesLeft - 1, codeHolder);
-            });
-          }
-          throw e;
         });
+    }
+
+    // Кусок с ретраями подряд (для пробы): при сбое повторить через паузу.
+    function fetchChunk(ret, retriesLeft, codeHolder) {
+      retriesLeft = retriesLeft == null ? RANGE_RETRIES : retriesLeft;
+      return fetchChunkOnce(ret, codeHolder).catch(function (e) {
+        if (retriesLeft > 0) {
+          return delay(RANGE_RETRY_DELAY).then(function () {
+            return fetchChunk(ret, retriesLeft - 1, codeHolder);
+          });
+        }
+        throw e;
+      });
     }
 
     return new Promise(function (resolve, reject) {
@@ -605,7 +626,7 @@
           var remaining = [];
           var idx = 0;
           while (pos < info.total) {
-            remaining.push({ start: pos, end: Math.min(pos + chunkSize - 1, info.total - 1), idx: idx++ });
+            remaining.push({ start: pos, end: Math.min(pos + chunkSize - 1, info.total - 1), idx: idx++, retries: 0 });
             pos += chunkSize;
           }
           if (remaining.length === 0) return info.first;
@@ -614,37 +635,57 @@
             var slots = new Array(remaining.length);
             var doneCount = 0;
             var failed = false;
+            var queue = remaining.slice();
             var cursor = 0;
-            function worker() {
-              if (failed) return;
-              if (cursor >= remaining.length) return;
-              var p = remaining[cursor++];
-              fetchChunk(p, RANGE_RETRIES, {})
+            var inflight = 0;
+
+            function finish() {
+              var full = info.first;
+              for (var i = 0; i < slots.length; i++) full += slots[i];
+              if (utf8Bytes(full) !== responseTotal) {
+                failed = true;
+                rejectPool(new Error("длина не сходится: " + utf8Bytes(full) + " вместо " + responseTotal));
+                return;
+              }
+              resolvePool(full);
+            }
+
+            // Пул: зависший кусок не блокирует поток — откладываем его в конец
+            // очереди (после короткой паузы) и сразу берём следующий.
+            function run(p) {
+              fetchChunkOnce(p, {})
                 .then(function (res) {
+                  inflight--;
                   if (failed) return;
                   if (res && res.total != null) responseTotal = res.total;
                   slots[p.idx] = res.text;
                   doneCount++;
-                  if (doneCount === remaining.length) {
-                    var full = info.first;
-                    for (var i = 0; i < slots.length; i++) full += slots[i];
-                    if (utf8Bytes(full) !== responseTotal) {
-                      failed = true;
-                      rejectPool(new Error("длина не сходится: " + utf8Bytes(full) + " вместо " + responseTotal));
-                      return;
-                    }
-                    resolvePool(full);
-                  } else {
-                    worker();
-                  }
+                  if (doneCount === remaining.length) { finish(); return; }
+                  pump();
                 })
                 .catch(function (e) {
+                  inflight--;
                   if (failed) return;
-                  failed = true;
-                  rejectPool(e);
+                  p.retries = (p.retries || 0) + 1;
+                  if (p.retries <= RANGE_RETRIES) {
+                    delay(RANGE_RETRY_DELAY).then(function () {
+                      if (failed) return;
+                      queue.push(p);
+                      pump();
+                    });
+                  } else {
+                    failed = true;
+                    rejectPool(e);
+                  }
                 });
             }
-            for (var i = 0; i < Math.min(poolSize, remaining.length); i++) worker();
+            function pump() {
+              while (!failed && inflight < poolSize && cursor < queue.length) {
+                inflight++;
+                run(queue[cursor++]);
+              }
+            }
+            pump();
           });
         })
         .then(function (fullText) {
@@ -686,10 +727,13 @@
     if (JS_ASSET) sources.push(JS_ASSET);
     if (JS && (!JS_ASSET || JS !== JS_ASSET)) sources.push(JS);
     write("warn", "Яндекс.Браузер: заряжаю бандл Range-кусками вместо целого тела");
+    rangeActive = true;
+    armRangeWatchdog();
     var srcIndex = 0;
     function tryNext() {
       if (window.__APP_READY__) { markReady(); return; }
-      if (srcIndex >= sources.length) { scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+      if (srcIndex >= sources.length) { rangeActive = false; scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+      armRangeWatchdog();
       rangeDownloadThenRun(sources[srcIndex++], tryNext);
     }
     tryNext();
@@ -1005,12 +1049,6 @@
     // качаем бандл маленькими Range-кусками и не дёргаем целые файлы.
     if (isYandex()) {
       startYandexPrimary();
-      finalTimer = setTimeout(function () {
-        if (!window.__APP_READY__) {
-          write("warn", "Range-загрузка не завершилась за " + READY_WATCHDOG + "мс");
-          scheduleFallback("APP_TIMEOUT");
-        }
-      }, READY_WATCHDOG);
       return;
     }
 
