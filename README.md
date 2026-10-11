@@ -183,7 +183,7 @@ Pages, Netlify и т.п.) — загрузчик переберёт их по о
 | `session` | GET | Текущее состояние (authorized, setupRequired) |
 | `login` | POST | Вход: `{username, password}` |
 | `logout` | POST | Выход (гасит сессию и cookie) |
-| `photos` | GET | `offset`, `count` (1…1000) — страница фотографий (только после входа) |
+| `photos` | GET | `offset` (0…100000), `count` (1…1000) — страница фотографий (только после входа) |
 | `stacks` | GET | Получить «стопки» похожих фото (ИИ, при сбое — фоллбэк по датам; долго при первом запуске) |
 | `stacks` | POST | `{refresh: 1}` — пересобрать «стопки» |
 | `stack_photos` | GET | `gid` — фото конкретной стопки |

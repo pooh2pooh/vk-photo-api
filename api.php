@@ -15,6 +15,7 @@ const ALBUM_ID = 'saved';
 const DEFAULT_API_VERSION = '5.199';
 const CACHE_TTL_SECONDS = 300;
 const MAX_COUNT = 1000;
+const MAX_OFFSET = 100000;
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -499,7 +500,7 @@ function action_photos(array $s): void
         fail(503, 'VK_NOT_CONFIGURED', 'VK-токен не задан на сервере');
     }
 
-    $offset = filter_var($_GET['offset'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['default' => 0, 'min_range' => 0]]);
+    $offset = filter_var($_GET['offset'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['default' => 0, 'min_range' => 0, 'max_range' => MAX_OFFSET]]);
     $count = filter_var($_GET['count'] ?? 30, FILTER_VALIDATE_INT, ['options' => ['default' => 30, 'min_range' => 1, 'max_range' => MAX_COUNT]]);
     if (!is_int($offset) || !is_int($count)) {
         fail(400, 'VALIDATION_FAILED', 'offset/count должны быть целыми числами');
@@ -509,7 +510,6 @@ function action_photos(array $s): void
     $key = hash('sha256', json_encode(['album' => ALBUM_ID, 'o' => $offset, 'c' => $count]));
 
     if (($cached = cache_get($key)) !== null) {
-        header('Cache-Control: private, max-age=' . CACHE_TTL_SECONDS);
         json_out($cached);
     }
 
@@ -533,7 +533,6 @@ function action_photos(array $s): void
     ];
 
     cache_put($key, $result);
-    header('Cache-Control: private, max-age=' . CACHE_TTL_SECONDS);
     json_out($result);
 }
 

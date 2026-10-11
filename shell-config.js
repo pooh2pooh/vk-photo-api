@@ -17,8 +17,8 @@ window.__VK_SHELL_MIRRORS__ = {
 
   /* Зеркала CSS-бандла. */
   css: [
-    "https://cdn.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-DDrq65dW.css",
-    "https://fastly.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-DDrq65dW.css"
+    "https://cdn.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-D-FZPVNy.css",
+    "https://fastly.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-D-FZPVNy.css"
   ],
 
   /* Прокси: если прямой доступ к CDN блокируется, те же зеркала

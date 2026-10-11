@@ -12,6 +12,8 @@ interface ShellLoader {
   error(message: string): void;
   net(message: string): void;
   clear(): void;
+  restart(): void;
+  report(): void;
   isReady(): boolean;
 }
 
