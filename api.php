@@ -679,7 +679,7 @@ function ai_chat_once(array $cfg, array $messages, array $extra, bool $relaxSsl)
     if (isset($json['error']) && is_array($json['error'])) {
         $msg = (string) ($json['error']['message'] ?? json_encode($json['error'], JSON_UNESCAPED_UNICODE));
         $status = (string) ($json['error']['status'] ?? '');
-        $lower = mb_strtolower($msg);
+        $lower = u_lower($msg);
         $isQuota = $status === 'RESOURCE_EXHAUSTED'
             || (int) ($json['error']['code'] ?? 0) === 429
             || str_contains($lower, 'quota')
@@ -865,10 +865,28 @@ function u_len(string $s): int
     return function_exists('mb_strlen') ? mb_strlen($s, 'UTF-8') : strlen($s);
 }
 
+/* Нижний регистр без mbstring: штатная функция есть не на всех хостингах.
+ * Фолбэк строит регистр вручную для кириллицы (strtolower её не трогает). */
+function u_lower(string $s): string
+{
+    if (function_exists('mb_strtolower')) {
+        return mb_strtolower($s, 'UTF-8');
+    }
+    $s = strtolower($s);
+    return strtr($s, [
+        'А' => 'а', 'Б' => 'б', 'В' => 'в', 'Г' => 'г', 'Д' => 'д', 'Е' => 'е',
+        'Ё' => 'ё', 'Ж' => 'ж', 'З' => 'з', 'И' => 'и', 'Й' => 'й', 'К' => 'к',
+        'Л' => 'л', 'М' => 'м', 'Н' => 'н', 'О' => 'о', 'П' => 'п', 'Р' => 'р',
+        'С' => 'с', 'Т' => 'т', 'У' => 'у', 'Ф' => 'ф', 'Х' => 'х', 'Ц' => 'ц',
+        'Ч' => 'ч', 'Ш' => 'ш', 'Щ' => 'щ', 'Ъ' => 'ъ', 'Ы' => 'ы', 'Ь' => 'ь',
+        'Э' => 'э', 'Ю' => 'ю', 'Я' => 'я',
+    ]);
+}
+
 /* Короткая тема -> набор значимых слов. */
 function label_tokens(string $label): array
 {
-    $t = function_exists('mb_strtolower') ? mb_strtolower($label, 'UTF-8') : strtolower($label);
+    $t = u_lower($label);
     $t = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $t) ?? $t;
     $words = preg_split('/\s+/u', trim($t)) ?: [];
     $words = array_filter($words, function (string $w): bool {
