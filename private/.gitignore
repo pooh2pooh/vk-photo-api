@@ -1,4 +1,5 @@
 cache/
 asset-cache/
 diag/
+ai-cache/
 secrets.php

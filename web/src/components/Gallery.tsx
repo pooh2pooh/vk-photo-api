@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, GROUP_AUTH_ERROR_CODE, fetchStackPhotos, fetchStacks } from "../api/client.js";
 import type { StackGroup, StackPhotosResult, StacksResult } from "../api/types.js";
 import { PAGE_SIZE_DENSE, PAGE_SIZE_NORMAL, isDenseSize } from "../api/config.js";
 import { usePhotos, usePageSize } from "../hooks/usePhotos.js";
-import { IconGridLarge, IconGridSmall, IconLayers, IconLogout, IconRefresh, IconX } from "./icons.js";
+import { IconGridLarge, IconGridSmall, IconLayers, IconLogout, IconMore, IconRefresh, IconX } from "./icons.js";
 import { Lightbox } from "./Lightbox.js";
 import { Pagination } from "./Pagination.js";
 import { PhotoCard } from "./PhotoCard.js";
@@ -30,6 +30,32 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
   const [stackTarget, setStackTarget] = useState<StackGroup | null>(null);
   const [stackViewLoading, setStackViewLoading] = useState(false);
   const [stackViewError, setStackViewError] = useState<string | null>(null);
+
+  // На мобильных основные действия прячутся в меню «три точки».
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
 
   const items = query.data?.items ?? [];
   const dense = isDenseSize(pageSize);
@@ -85,6 +111,22 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
     try {
       setStackView(await fetchStackPhotos(group.gid));
     } catch (error) {
+      // Серверный кэш стопок мог не сохраниться или быть очищен между
+      // запросами — пересобираем стопки (gid мог измениться) и пробуем снова.
+      if (error instanceof ApiError && error.code === "AI_NO_STACKS") {
+        try {
+          const rebuilt = await fetchStacks(true);
+          setStacks(rebuilt);
+          const again = rebuilt.groups.find((g) => g.label === group.label) ?? rebuilt.groups.find((g) => g.gid === group.gid);
+          if (again) {
+            setStackTarget(again);
+            setStackView(await fetchStackPhotos(again.gid));
+            return;
+          }
+        } catch {
+          // упало и на пересборке — покажем исходную ошибку
+        }
+      }
       setStackViewError(error instanceof Error ? error.message : String(error));
     } finally {
       setStackViewLoading(false);
@@ -99,7 +141,7 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
   return (
     <section className="gallery" data-busy={busy ? "true" : "false"}>
       <header className="gallery__header">
-        <div>
+        <div className="gallery__heading">
           <h1>Сохранённые фото ВКонтакте</h1>
           <p className="gallery__subtitle">
             {query.data ? `Всего: ${query.data.total}` : "Загрузка…"}
@@ -107,36 +149,70 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
             {busy ? " · обновление…" : ""}
           </p>
         </div>
-        <button
-          type="button"
-          className="gallery__stacks icon-button"
-          onClick={toggleStacks}
-          aria-expanded={panelOpen}
-          aria-label="Стопки"
-          title="Стопки похожих фото"
-        >
-          <IconLayers />
-        </button>
-        <button
-          type="button"
-          className="gallery__density icon-button"
-          onClick={toggleDense}
-          aria-pressed={dense}
-          aria-label={dense ? "Обычный вид" : "Обзор"}
-          title={dense ? "Обычный вид: вернуть крупные превью" : `Обзор: показать по ${PAGE_SIZE_DENSE} фото с мелкими превью`}
-        >
-          {dense ? <IconGridLarge /> : <IconGridSmall />}
-        </button>
-        <button
-          type="button"
-          className="gallery__refresh icon-button"
-          onClick={() => query.refetch()}
-          disabled={busy}
-          aria-label="Обновить"
-          title="Обновить"
-        >
-          <IconRefresh />
-        </button>
+
+        <div className="gallery__actions gallery__actions--desktop">
+          <button
+            type="button"
+            className="gallery__stacks icon-button"
+            onClick={toggleStacks}
+            aria-expanded={panelOpen}
+            aria-label="Стопки"
+            title="Стопки похожих фото"
+          >
+            <IconLayers />
+          </button>
+          <button
+            type="button"
+            className="gallery__density icon-button"
+            onClick={toggleDense}
+            aria-pressed={dense}
+            aria-label={dense ? "Обычный вид" : "Обзор"}
+            title={dense ? "Обычный вид: вернуть крупные превью" : `Обзор: показать по ${PAGE_SIZE_DENSE} фото с мелкими превью`}
+          >
+            {dense ? <IconGridLarge /> : <IconGridSmall />}
+          </button>
+          <button
+            type="button"
+            className="gallery__refresh icon-button"
+            onClick={() => query.refetch()}
+            disabled={busy}
+            aria-label="Обновить"
+            title="Обновить"
+          >
+            <IconRefresh />
+          </button>
+        </div>
+
+        <div className="gallery__actions gallery__actions--mobile" ref={menuRef}>
+          <button
+            type="button"
+            className="gallery__menu-trigger icon-button"
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="Ещё"
+            title="Ещё"
+          >
+            <IconMore />
+          </button>
+          {menuOpen ? (
+            <div className="gallery__menu" role="menu" aria-label="Дополнительные действия">
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); toggleStacks(); }}>
+                <IconLayers />
+                <span>Стопки</span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); toggleDense(); }}>
+                {dense ? <IconGridLarge /> : <IconGridSmall />}
+                <span>{dense ? "Обычный вид" : "Обзор"}</span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); query.refetch(); }} disabled={busy}>
+                <IconRefresh />
+                <span>Обновить</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
+
         <button
           type="button"
           className="gallery__logout icon-button"

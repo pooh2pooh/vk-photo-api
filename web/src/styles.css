@@ -9,6 +9,11 @@
   --accent: #4c8bf5;
   --accent-strong: #2f6ae0;
   --danger: #f2555a;
+  /* Умеренный скевоморфизм: глубина панелей и «фаска» кнопок. */
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.4), 0 12px 28px rgba(0, 0, 0, 0.35);
+  --highlight: rgba(255, 255, 255, 0.05);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -267,8 +272,9 @@ button {
   margin-bottom: 20px;
 }
 
-.gallery__header > div:first-child {
+.gallery__heading {
   flex: 1;
+  min-width: 0;
 }
 
 .gallery__header h1 {
@@ -282,37 +288,18 @@ button {
   font-size: 0.9rem;
 }
 
-.gallery__header button,
-.pagination button {
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  padding: 8px 14px;
-  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+.gallery__actions {
+  display: inline-flex;
+  gap: 8px;
 }
 
-.gallery__header button:hover:not(:disabled),
-.pagination button:hover:not(:disabled) {
-  background: #2b313c;
-  border-color: #3a4150;
+.gallery__actions--mobile {
+  display: none;
+  position: relative;
 }
 
-.gallery__header button:disabled,
-.pagination button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.gallery__density[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: #fff;
-  background: rgba(76, 139, 245, 0.18);
-}
-
-/* Кнопки-иконки: квадратные, с контурным SVG по центру. */
-.gallery__header button.icon-button,
-.pagination button.icon-button {
+/* Кнопки-иконки: квадратные, с контурным SVG по центру и лёгким «объёмом». */
+button.icon-button {
   width: 40px;
   height: 40px;
   padding: 0;
@@ -320,13 +307,90 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-radius: 10px;
+  border: 1px solid #0e1116;
+  background: linear-gradient(180deg, #2b313c, #222731);
+  color: var(--text);
+  box-shadow: var(--shadow-inset), 0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
 }
 
-.gallery__header button.icon-button svg,
-.pagination button.icon-button svg {
+button.icon-button svg {
   display: block;
   width: 20px;
   height: 20px;
+}
+
+button.icon-button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #343b48, #272d38);
+  border-color: #3a4150;
+}
+
+button.icon-button:active:not(:disabled) {
+  background: linear-gradient(180deg, #1f242c, #262c36);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.55);
+  transform: translateY(1px);
+}
+
+button.icon-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gallery__density[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: #fff;
+  background: linear-gradient(180deg, #3a6fd8, #2f5fbf);
+  box-shadow: var(--shadow-inset), 0 0 0 1px rgba(76, 139, 245, 0.35), 0 2px 6px rgba(47, 106, 224, 0.4);
+}
+
+/* Выпадающее меню «три точки» (только мобильные). */
+.gallery__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  min-width: 196px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #0e1116;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #232833, #1a1f27);
+  box-shadow: var(--shadow-md);
+  animation: cardIn 0.16s ease both;
+}
+
+.gallery__menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  box-shadow: none;
+  transition: background 0.13s ease;
+}
+
+.gallery__menu button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.gallery__menu button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gallery__menu button svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
 }
 
 /* Карточку с фото можно перетаскивать, чтобы сохранить или поделиться. */
@@ -465,10 +529,37 @@ button {
   margin-top: 28px;
 }
 
+.pagination__page {
+  min-width: 38px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid #0e1116;
+  background: linear-gradient(180deg, #2b313c, #222731);
+  color: var(--text);
+  box-shadow: var(--shadow-inset), 0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+
+.pagination__page:hover:not(:disabled) {
+  background: linear-gradient(180deg, #343b48, #272d38);
+  border-color: #3a4150;
+}
+
+.pagination__page:active:not(:disabled) {
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.55);
+  transform: translateY(1px);
+}
+
+.pagination__page:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .pagination__page--active {
-  background: var(--accent);
+  background: linear-gradient(180deg, #3a6fd8, #2f5fbf);
   border-color: var(--accent);
   color: #fff;
+  box-shadow: var(--shadow-inset), 0 2px 6px rgba(47, 106, 224, 0.4);
 }
 
 .pagination__ellipsis {
@@ -479,9 +570,10 @@ button {
 /* ---------------------------------------------------------------- stacks */
 
 .stacks {
-  border: 1px solid var(--border);
+  border: 1px solid #0e1116;
   border-radius: 12px;
-  background: var(--surface-2);
+  background: linear-gradient(180deg, #222731, #1c2028);
+  box-shadow: var(--shadow-inset), var(--shadow-md);
   padding: 14px 16px 18px;
   margin-bottom: 22px;
 }
@@ -536,8 +628,8 @@ button {
 }
 
 .stacks__grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
   gap: 10px;
   max-height: 320px;
   overflow-y: auto;
@@ -549,19 +641,21 @@ button {
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
-  width: 128px;
+  width: 100%;
   padding: 8px;
-  border: 1px solid var(--border);
+  border: 1px solid #0e1116;
   border-radius: 10px;
-  background: var(--surface);
+  background: linear-gradient(180deg, #1e222a, #191d24);
   color: var(--text);
+  box-shadow: var(--shadow-inset), var(--shadow-sm);
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .stack-card:hover {
   border-color: var(--accent);
   background: #242933;
+  box-shadow: var(--shadow-inset), 0 6px 16px rgba(0, 0, 0, 0.45);
   transform: translateY(-2px);
 }
 
@@ -613,9 +707,10 @@ button {
   gap: 12px;
   margin-bottom: 18px;
   padding: 10px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid #0e1116;
   border-radius: 10px;
-  background: var(--surface-2);
+  background: linear-gradient(180deg, #222731, #1c2028);
+  box-shadow: var(--shadow-inset), var(--shadow-sm);
 }
 
 .stack-active__title {
@@ -632,18 +727,24 @@ button {
 }
 
 .stack-active__exit {
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border-radius: 9px;
+  border: 1px solid #0e1116;
+  background: linear-gradient(180deg, #2b313c, #222731);
   color: var(--text);
   padding: 8px 14px;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  box-shadow: var(--shadow-inset), 0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
 }
 
 .stack-active__exit:hover {
-  background: #2b313c;
+  background: linear-gradient(180deg, #343b48, #272d38);
   border-color: #3a4150;
+}
+
+.stack-active__exit:active {
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.55);
+  transform: translateY(1px);
 }
 
 /* ---------------------------------------------------------------- states */
@@ -965,7 +1066,22 @@ button {
 
 @media (max-width: 640px) {
   .gallery__header {
-    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .gallery__heading {
+    flex: 1 1 100%;
+  }
+
+  /* Основные действия прячем в меню «три точки», «Выйти» — рядом с ним. */
+  .gallery__actions--desktop {
+    display: none;
+  }
+
+  .gallery__actions--mobile {
+    display: inline-flex;
+    margin-left: auto;
   }
 
   .photo-card {

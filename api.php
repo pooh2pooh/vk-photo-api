@@ -343,7 +343,14 @@ function cache_put(string $key, array $data): void
     if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
         return; // кэш не критичен — продолжим без него
     }
-    @file_put_contents(cache_path($key), json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+    $json = json_encode(
+        $data,
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR,
+    );
+    if (!is_string($json)) {
+        return; // не затираем валидный кэш сбойным результатом
+    }
+    @file_put_contents(cache_path($key), $json, LOCK_EX);
 }
 
 /* ---------------------------------------------------------------- actions */
@@ -467,11 +474,24 @@ class AiQuotaExhausted extends RuntimeException
 
 function ai_dir(): ?string
 {
-    $dir = __DIR__ . '/private/ai-cache';
-    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
-        return null;
+    static $resolved = false;
+    if ($resolved !== false) {
+        return $resolved;
     }
-    return $dir;
+    $candidates = [__DIR__ . '/private/ai-cache'];
+    $tmp = function_exists('sys_get_temp_dir') ? sys_get_temp_dir() : '';
+    if (is_string($tmp) && $tmp !== '' && is_dir($tmp)) {
+        $candidates[] = rtrim($tmp, '/\\') . '/vkphotos-' . substr(hash('sha256', __DIR__), 0, 12);
+    }
+    foreach ($candidates as $dir) {
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            continue;
+        }
+        if (is_writable($dir)) {
+            return $resolved = $dir;
+        }
+    }
+    return $resolved = null;
 }
 
 function ai_config(array $s): array
@@ -511,12 +531,14 @@ function ai_user_key(array $s): string
 
 function ai_cache_path(string $userKey): string
 {
-    return __DIR__ . '/private/ai-cache/stacks-' . $userKey . '.json';
+    $dir = ai_dir();
+    return ($dir ?? __DIR__ . '/private/ai-cache') . '/stacks-' . $userKey . '.json';
 }
 
 function ai_snapshot_path(string $userKey): string
 {
-    return __DIR__ . '/private/ai-cache/snapshot-' . $userKey . '.json';
+    $dir = ai_dir();
+    return ($dir ?? __DIR__ . '/private/ai-cache') . '/snapshot-' . $userKey . '.json';
 }
 
 function ai_read_cache(string $userKey): ?array
@@ -525,17 +547,31 @@ function ai_read_cache(string $userKey): ?array
     if (!is_file($path)) {
         return null;
     }
-    $data = json_decode((string) file_get_contents($path), true);
+    $raw = (string) file_get_contents($path);
+    if ($raw === '') {
+        return null; // обрезанный/пустой файл (например, старый сбой json_encode)
+    }
+    $data = json_decode($raw, true);
     return is_array($data) ? $data : null;
 }
 
-function ai_write_json(string $path, array $data): void
+/* Пишем JSON, устойчиво к невалидному UTF-8 из VK (иначе json_encode вернёт
+ * false и мы затрём кэш пустым файлом — именно из-за этого «стопки» на
+ * хостинге показывались, а stack_photos отвечал AI_NO_STACKS). */
+function ai_write_json(string $path, array $data): bool
 {
     $dir = dirname($path);
     if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
-        return;
+        return false;
     }
-    @file_put_contents($path, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+    $json = json_encode(
+        $data,
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR,
+    );
+    if (!is_string($json)) {
+        return false;
+    }
+    return @file_put_contents($path, $json, LOCK_EX) !== false;
 }
 
 /* Все фото альбома одной лентой (постранично, как в интерфейсе). */
@@ -1347,7 +1383,12 @@ function action_stacks(array $s): void
         'groups' => $groups,
         'public' => $public,
     ];
-    ai_write_json(ai_cache_path($userKey), $cacheData);
+    if (!ai_write_json(ai_cache_path($userKey), $cacheData)) {
+        // Без записанного кэша клик по стопке упрётся в AI_NO_STACKS — лучше
+        // честная ошибка сейчас, чем неработающие группы потом.
+        log_error('stacks_cache_write', new RuntimeException('не удалось записать ' . ai_cache_path($userKey)));
+        fail(500, 'STACKS_CACHE_FAILED', 'Не удалось сохранить стопки на сервере');
+    }
     ai_write_json(ai_snapshot_path($userKey), ['built' => $now, 'total' => count($photos), 'photos' => $photos]);
     json_out($public);
 }

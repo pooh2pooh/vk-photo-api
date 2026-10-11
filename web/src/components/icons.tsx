@@ -105,3 +105,14 @@ export function IconX(props: IconProps) {
     </svg>
   );
 }
+
+/** Дополнительные действия (меню «три точки»). */
+export function IconMore(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="5" r="1.4" />
+      <circle cx="12" cy="12" r="1.4" />
+      <circle cx="12" cy="19" r="1.4" />
+    </svg>
+  );
+}
