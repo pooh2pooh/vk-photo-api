@@ -507,6 +507,12 @@ button {
   gap: 6px;
 }
 
+.stacks__note {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .stacks__loading,
 .stacks__error {
   display: flex;

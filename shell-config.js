@@ -11,14 +11,14 @@
 window.__VK_SHELL_MIRRORS__ = {
   /* Зеркала JS-бандла (полные URL или относительные пути). */
   js: [
-    "https://cdn.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-DtchLoSz.js",
-    "https://fastly.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-DtchLoSz.js"
+    "https://cdn.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-BJsunBsl.js",
+    "https://fastly.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-BJsunBsl.js"
   ],
 
   /* Зеркала CSS-бандла. */
   css: [
-    "https://cdn.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-CTlGfJpO.css",
-    "https://fastly.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-CTlGfJpO.css"
+    "https://cdn.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-DFZkfcex.css",
+    "https://fastly.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-DFZkfcex.css"
   ],
 
   /* Прокси: если прямой доступ к CDN блокируется, те же зеркала

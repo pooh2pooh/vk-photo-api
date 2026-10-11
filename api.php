@@ -1058,10 +1058,13 @@ function build_stacks(array $s, array $cfg): array
 function ai_public(array $cache): array
 {
     if (isset($cache['public']) && is_array($cache['public'])) {
-        return $cache['public'];
+        $public = $cache['public'];
+        $public['mode'] = $public['mode'] ?? 'ai'; // старые кэши считаем ИИ-стопками
+        return $public;
     }
     return [
         'configured' => true,
+        'mode'       => 'ai',
         'built'      => (int) ($cache['built'] ?? 0),
         'total'      => (int) ($cache['total'] ?? 0),
         'groups'     => array_map(fn (array $g): array => [
@@ -1073,17 +1076,202 @@ function ai_public(array $cache): array
     ];
 }
 
+/* ------------------------------------------------------- фоллбэк без ИИ */
+
+/* Метка временного бакета в стиле «Сохранённых» ВК: свежее — словами,
+ * старее — по годам. Недели считаются с понедельника. */
+function date_bucket(int $ts, int $now): string
+{
+    if ($ts <= 0) {
+        return 'Без даты';
+    }
+    $todayStart = (int) strtotime('today', $now);
+    if ($ts >= $todayStart) {
+        return 'Сегодня';
+    }
+    if ($ts >= $todayStart - 86400) {
+        return 'Вчера';
+    }
+    $weekStart = (int) strtotime('monday this week', $now);
+    if ($ts >= $weekStart) {
+        return 'На этой неделе';
+    }
+    if ($ts >= $weekStart - 7 * 86400) {
+        return 'На прошлой неделе';
+    }
+    $monthStart = (int) strtotime('first day of this month', $now);
+    if ($ts >= $monthStart) {
+        return 'В этом месяце';
+    }
+    $prevMonthStart = (int) strtotime('first day of last month midnight', $now);
+    if ($ts >= $prevMonthStart) {
+        return 'В прошлом месяце';
+    }
+    $yearStart = (int) strtotime('first day of January this year', $now);
+    if ($ts >= $yearStart) {
+        return 'В этом году';
+    }
+    return (string) ((int) gmdate('Y', $ts));
+}
+
+/* Простое деление без ИИ: мелочь/мемы (длинная сторона < 400px) и скриншоты
+ * (портрет h >= 1.5w или панорама w >= 1.7h). */
+function photo_class(array $photo): string
+{
+    $w = (int) $photo['width'];
+    $h = (int) $photo['height'];
+    if ($w <= 0 || $h <= 0) {
+        return 'normal';
+    }
+    if (max($w, $h) < 400) {
+        return 'small';
+    }
+    if ($h >= (int) (1.6 * $w + 0.5) || $w >= (int) (2.0 * $h + 0.5)) {
+        return 'screenshot';
+    }
+    return 'normal';
+}
+
+function photo_hashtags(string $text): array
+{
+    preg_match_all('/#[\p{L}\p{N}_]+/u', u_lower($text), $m);
+    return array_values(array_unique($m[0] ?? []));
+}
+
+function group_cover(array $byKey, array $keys, int $max = 3): array
+{
+    $cover = [];
+    foreach (array_slice($keys, 0, $max) as $key) {
+        $thumb = $byKey[$key]['thumbnailUrl'] ?? null;
+        if ($thumb) {
+            $cover[] = $thumb;
+        }
+    }
+    return $cover;
+}
+
+/* Собираем стопки без ИИ: дата (VK-стиль) + скриншоты/мелочь + хэштеги.
+ * Возвращает [$groups, $photos] — та же схема, что у build_stacks(). */
+function build_stacks_fallback(array $photos): array
+{
+    $byKey = [];
+    foreach ($photos as $photo) {
+        $byKey[$photo['ownerId'] . '_' . $photo['id']] = $photo;
+    }
+
+    $recency = ['Сегодня', 'Вчера', 'На этой неделе', 'На прошлой неделе',
+        'В этом месяце', 'В прошлом месяце', 'В этом году', 'Без даты'];
+    $buckets = array_fill_keys($recency, []);
+    $years = [];
+    $now = time();
+
+    $special = ['Скриншоты' => [], 'Мелочь и мемы' => []];
+    $tagOf = []; // photo key -> первый «настоящий» хэштег (не #цифры, как «Фото #12»)
+
+    foreach ($photos as $photo) {
+        $key = $photo['ownerId'] . '_' . $photo['id'];
+        $cls = photo_class($photo);
+        if ($cls === 'screenshot') {
+            $special['Скриншоты'][] = $key;
+        } elseif ($cls === 'small') {
+            $special['Мелочь и мемы'][] = $key;
+        } else {
+            foreach (photo_hashtags((string) ($photo['text'] ?? '')) as $tag) {
+                if (preg_match('/^#[0-9]+$/u', $tag)) {
+                    continue; // «Фото #12» — это не тег
+                }
+                $tagOf[$key] = $tag;
+                break;
+            }
+        }
+    }
+
+    // Хэштеги: только те, что встречаются у >= 2 фото, топ-5 по числу фото.
+    $tagCount = [];
+    foreach ($tagOf as $tag) {
+        $tagCount[$tag] = ($tagCount[$tag] ?? 0) + 1;
+    }
+    $tagGroups = [];
+    foreach ($tagOf as $key => $tag) {
+        if (($tagCount[$tag] ?? 0) >= 2) {
+            $tagGroups[$tag][] = $key;
+        }
+    }
+    $tagLabels = array_keys($tagGroups);
+    usort($tagLabels, fn (string $a, string $b): int => count($tagGroups[$b]) <=> count($tagGroups[$a]));
+    $tagLabels = array_slice($tagLabels, 0, 5);
+
+    // Все фото, не попавшие в спец-стопки или хэштеги, уходят в даты — сумма = 100%.
+    $inSpecial = array_fill_keys(array_merge($special['Скриншоты'], $special['Мелочь и мемы']), true);
+    $inTags = array_fill_keys(array_merge(...array_values($tagGroups)), true);
+    foreach ($photos as $photo) {
+        $key = $photo['ownerId'] . '_' . $photo['id'];
+        if (isset($inSpecial[$key]) || isset($inTags[$key])) {
+            continue;
+        }
+        $bucket = date_bucket((int) ($photo['date'] ?? 0), $now);
+        if (isset($buckets[$bucket])) {
+            $buckets[$bucket][] = $key;
+        } else {
+            $years[$bucket][] = $key;
+        }
+    }
+
+    $ordered = [];
+    foreach ($recency as $b) {
+        if ($buckets[$b] !== []) {
+            $ordered[$b] = $buckets[$b];
+        }
+    }
+    krsort($years, SORT_STRING); // старые года — новые сверху
+    foreach ($years as $y => $keys) {
+        $ordered[$y] = $keys;
+    }
+    foreach (['Скриншоты', 'Мелочь и мемы'] as $name) {
+        if ($special[$name] !== []) {
+            $ordered[$name] = $special[$name];
+        }
+    }
+    foreach ($tagLabels as $tag) {
+        $ordered[ltrim($tag, '#')] = $tagGroups[$tag];
+    }
+
+    $groups = [];
+    $gid = 0;
+    foreach ($ordered as $label => $keys) {
+        $gid++;
+        $refs = [];
+        foreach ($keys as $key) {
+            [$own, $id] = explode('_', $key, 2);
+            $refs[] = ['ownerId' => (int) $own, 'id' => (int) $id];
+        }
+        $groups[] = [
+            'gid'    => 's' . $gid,
+            'label'  => (string) $label,
+            'count'  => count($keys),
+            'cover'  => group_cover($byKey, $keys),
+            'photos' => $refs,
+        ];
+    }
+
+    return [$groups, $photos];
+}
+
+/* Короткая человекочитаемая причина фоллбэка (без технических деталей). */
+function ai_fallback_note(Throwable $e): string
+{
+    if ($e instanceof AiQuotaExhausted) {
+        return 'ИИ: квота исчерпана — стопки собраны без ИИ (по дате)';
+    }
+    return 'ИИ временно недоступен — стопки собраны без ИИ (по дате)';
+}
+
 function action_stacks(array $s): void
 {
     require_auth();
     $cfg = ai_config($s);
-    if (!$cfg['ready']) {
-        fail(503, 'AI_NOT_CONFIGURED',
-            'ИИ не настроен: впишите ключ (ai_api_key), базовый URL (ai_base_url) и модель (ai_model) в private/secrets.php. '
-            . 'Бесплатные модели — на freellm.net (например, Gemini AI Studio).');
-    }
     if (ai_dir() === null) {
-        fail(503, 'AI_CACHE_UNAVAILABLE', 'Недоступна папка для кэша ИИ');
+        fail(503, 'AI_CACHE_UNAVAILABLE', 'Недоступна папка для кэша стопок');
     }
 
     $userKey = ai_user_key($s);
@@ -1104,14 +1292,31 @@ function action_stacks(array $s): void
         }
         fail(503, 'AI_BUILDING', 'Стопки уже собираются, попробуйте через минуту');
     }
+
+    $mode = 'ai';
+    $note = null;
     try {
         if (function_exists('set_time_limit')) {
             @set_time_limit(900);
         }
-        [$groups, $photos] = build_stacks($s, $cfg);
+        if (!$cfg['ready']) {
+            // ИИ не настроен — работаем без него, кнопка «Стопки» всё равно полезна.
+            $mode = 'date';
+            $note = 'ИИ не настроен — стопки собраны по дате и подписям';
+            [$groups, $photos] = build_stacks_fallback(fetch_all_photos($s));
+        } else {
+            try {
+                [$groups, $photos] = build_stacks($s, $cfg);
+            } catch (Throwable $e) {
+                log_error('stacks', $e);
+                $mode = 'date';
+                $note = ai_fallback_note($e);
+                [$groups, $photos] = build_stacks_fallback(fetch_all_photos($s));
+            }
+        }
     } catch (Throwable $e) {
-        log_error('stacks', $e);
-        fail(502, 'AI_FAILED', 'ИИ не смог собрать стопки: ' . $e->getMessage());
+        log_error('stacks_fallback', $e);
+        fail(502, 'STACKS_FAILED', 'Не удалось собрать стопки: ' . $e->getMessage());
     } finally {
         if ($lock !== false) {
             fclose($lock);
@@ -1120,7 +1325,8 @@ function action_stacks(array $s): void
 
     $now = time();
     $public = [
-        'configured' => true,
+        'configured' => $cfg['ready'],
+        'mode'       => $mode,
         'built'      => $now,
         'total'      => count($photos),
         'groups'     => array_map(fn (array $g): array => [
@@ -1130,9 +1336,14 @@ function action_stacks(array $s): void
             'cover' => $g['cover'],
         ], $groups),
     ];
+    if ($note !== null) {
+        $public['note'] = $note;
+    }
     $cacheData = [
         'built'  => $now,
         'total'  => count($photos),
+        'mode'   => $mode,
+        'note'   => $note,
         'groups' => $groups,
         'public' => $public,
     ];

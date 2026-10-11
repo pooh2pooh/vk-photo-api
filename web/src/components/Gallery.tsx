@@ -62,10 +62,9 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
     setStacksError(null);
     try {
       const result = await fetchStacks(refresh);
-      setStacks(result.configured ? result : null);
-      if (!result.configured) {
-        setStacksError("ИИ не настроен на сервере — см. private/secrets.php.");
-      }
+      // Фоллбэк без ИИ возвращает группы по датам/подписям даже при
+      // configured:false — это не ошибка, а обычный режим «date».
+      setStacks(result);
     } catch (error) {
       setStacksError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -156,7 +155,13 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
       ) : null}
 
       {panelOpen ? (
-        <section className="stacks" aria-label="Стопки похожих фото">
+        <section
+          className="stacks"
+          aria-label="Стопки похожих фото"
+          data-mode={stacks?.mode ?? null}
+          data-built={stacks?.built ?? null}
+          data-total={stacks?.total ?? null}
+        >
           <div className="stacks__head">
             <p className="stacks__title">
               <IconLayers width={16} height={16} />
@@ -184,6 +189,12 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
               </button>
             </div>
           </div>
+
+          {stacks?.mode === "date" ? (
+            <p className="stacks__note">
+              {stacks.note ?? "Стопки собраны без ИИ (по дате, подписям и размерам)"}
+            </p>
+          ) : null}
 
           {stacksLoading ? (
             <div className="stacks__loading" role="status">

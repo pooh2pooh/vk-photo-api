@@ -36,6 +36,8 @@ export interface StackGroup {
 
 export interface StacksResult {
   configured: boolean;
+  mode?: "ai" | "date";
+  note?: string;
   built?: number;
   total?: number;
   groups: StackGroup[];
