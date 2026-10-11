@@ -28,6 +28,8 @@ export function PhotoCard({ photo, onOpen }: PhotoCardProps) {
         <img
           src={src}
           alt={photo.text}
+          width={photo.width || undefined}
+          height={photo.height || undefined}
           loading="lazy"
           decoding="async"
           draggable={false}

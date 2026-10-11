@@ -25,6 +25,7 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
 
   const lastNavRef = useRef(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const thumbsRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -88,7 +89,19 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
     }
   }, [photos, index]);
 
-  // Клавиатура: Esc — закрыть, ←/→ — листать.
+  // Фокус: при открытии уводим его внутрь модалки, при закрытии — возвращаем
+  // на элемент-инициатор (кнопку-карточку), чтобы не терять контекст.
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    return () => {
+      if (previous && typeof previous.focus === "function" && document.contains(previous)) {
+        previous.focus();
+      }
+    };
+  }, []);
+
+  // Клавиатура: Esc — закрыть, ←/→ — листать, Tab — циклично внутри лайтбокса.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -99,6 +112,29 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
         go(1);
+      } else if (event.key === "Tab") {
+        const root = rootRef.current;
+        if (!root) return;
+        const focusables = Array.from(
+          root.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ),
+        );
+        if (focusables.length === 0) {
+          event.preventDefault();
+          return;
+        }
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (!first || !last) return;
+        const active = document.activeElement as HTMLElement | null;
+        if (!event.shiftKey && (active === last || !root.contains(active))) {
+          event.preventDefault();
+          first.focus();
+        } else if (event.shiftKey && (active === first || !root.contains(active))) {
+          event.preventDefault();
+          last.focus();
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -261,9 +297,16 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
   const src = photo.displayUrl ?? photo.thumbnailUrl;
 
   return (
-    <div className="lightbox" role="dialog" aria-modal="true" ref={rootRef} onClick={onClose}>
+    <div
+      className="lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Просмотр фотографии"
+      ref={rootRef}
+      onClick={onClose}
+    >
       <div className="lightbox__content" onClick={(event) => event.stopPropagation()}>
-        <button type="button" className="lightbox__close" onClick={onClose} aria-label="Закрыть">
+        <button type="button" className="lightbox__close" ref={closeRef} onClick={onClose} aria-label="Закрыть">
           ×
         </button>
 
@@ -293,6 +336,8 @@ export function Lightbox({ photos, index, onIndexChange, onClose }: LightboxProp
               ref={imgRef}
               src={src}
               alt={photo.text}
+              width={photo.width || undefined}
+              height={photo.height || undefined}
               className={loaded ? "is-loaded" : undefined}
               onLoad={() => setLoaded(true)}
               onError={() => setFailed(true)}
