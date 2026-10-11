@@ -11,8 +11,8 @@
 window.__VK_SHELL_MIRRORS__ = {
   /* Зеркала JS-бандла (полные URL или относительные пути). */
   js: [
-    "https://cdn.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-BAM4cVAw.js",
-    "https://fastly.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-BAM4cVAw.js"
+    "https://cdn.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-Btqp9eM2.js",
+    "https://fastly.jsdelivr.net/gh/pooh2pooh/vk-photo-api@main/assets/app-Btqp9eM2.js"
   ],
 
   /* Зеркала CSS-бандла. */

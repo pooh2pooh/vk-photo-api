@@ -961,12 +961,18 @@ if ($fails >= 5) fail(429, 'TOO_MANY_ATTEMPTS', 'Слишком много по�
 - для state-changing действий — **проверка `Origin`/`Referer`** или CSRF-токен;
 - `logout` делай **`POST`**, а не `GET` (GET уходит по ссылке/навигации);
 - никаких state-changing `GET`.
+- реализация: `require_method('POST')` (405 с `Allow`) + `assert_same_origin()`
+  (403 при чужом `Origin`/`Referer`; если заголовков нет — прямой вызов, не
+  блокируем); применяется к `login`, `logout` и `stacks` при `refresh`.
 
 ### 6.5 Секреты
 
 - файл `private/secrets.php` — **вне webroot в идеале**, закрыт `.htaccess`
   (`Require all denied`), обязательно в `.gitignore`;
 - права: файл `0600`, каталог `0700`;
+- если права шире, сервер **мягко** предупреждает: однократно пишет в
+  `private/diag/secrets-perms.log` и продолжает работу (не блокируем — на
+  shared-хостингах схему закрывает `.htaccess`);
 - форма — `secrets.example.php` (коммитится, без реальных значений);
 - приоритет env-переменных над файлом (удобно в контейнерах/CI);
 - **никогда** не логировать и не отдавать секреты клиенту;

@@ -9,4 +9,4 @@ if ($pass === '') {
     fwrite(STDERR, "Usage: php scripts/make-hash.php <password>\n");
     exit(1);
 }
-echo password_hash($pass, PASSWORD_DEFAULT), "\n";
+echo password_hash($pass, PASSWORD_DEFAULT, ['cost' => 12]), "\n";

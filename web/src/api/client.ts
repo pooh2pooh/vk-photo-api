@@ -122,7 +122,7 @@ export const checkSession = (): Promise<SessionState> => api("session");
 export const login = (username: string, password: string): Promise<AuthResult> =>
   api("login", { method: "POST", body: { username, password } });
 
-export const logout = (): Promise<AuthResult> => api("logout");
+export const logout = (): Promise<AuthResult> => api("logout", { method: "POST" });
 
 export function fetchPhotos(input: { offset: number; count: number }): Promise<PhotosPage> {
   return api<PhotosPage>("photos", {
@@ -137,7 +137,8 @@ export function fetchPhotos(input: { offset: number; count: number }): Promise<P
  */
 export const fetchStacks = (refresh?: boolean): Promise<StacksResult> =>
   api<StacksResult>("stacks", {
-    params: refresh ? { refresh: 1 } : {},
+    method: refresh ? "POST" : "GET",
+    body: refresh ? { refresh: 1 } : undefined,
     timeoutMs: 300000,
   });
 

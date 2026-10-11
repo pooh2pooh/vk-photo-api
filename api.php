@@ -68,6 +68,42 @@ function request_body(): array
     return is_array($data) ? $data : [];
 }
 
+/* ------------------------------------------------------------ request guards */
+
+/* Гейтинг HTTP-метода для изменяющих состояние действий. */
+function require_method(string $method): void
+{
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== $method) {
+        header('Allow: ' . $method);
+        fail(405, 'METHOD_NOT_ALLOWED', 'Это действие доступно только методом ' . $method);
+    }
+}
+
+/*
+ * Проверка, что изменяющий запрос пришёл со своего же origin — защита от
+ * CSRF/сторонних сайтов. Заголовки Origin/Referer проверяем только если
+ * браузер их прислал: прямой вызов (CLI, curl) их не шлёт и не блокируется.
+ */
+function assert_same_origin(): void
+{
+    $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
+    if ($origin === '') {
+        $origin = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+    }
+    if ($origin === '') {
+        return;
+    }
+    $parts = parse_url($origin);
+    if (!is_array($parts) || !isset($parts['host'])) {
+        fail(403, 'BAD_ORIGIN', 'Запрос с некорректного источника отклонён');
+    }
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
+    $originHost = $parts['host'] . (isset($parts['port']) ? ':' . (int) $parts['port'] : '');
+    if ($host !== '' && !hash_equals($host, $originHost)) {
+        fail(403, 'CROSS_ORIGIN', 'Запрос с другого сайта отклонён');
+    }
+}
+
 /* ---------------------------------------------------------------- secrets */
 
 function load_secrets(): array
@@ -115,6 +151,42 @@ function secrets_ready(array $s): bool
         (isset($s['password_hash']) && $s['password_hash'] !== '' || isset($s['password']) && $s['password'] !== '');
     $hasToken = isset($s['vk_token']) && is_string($s['vk_token']) && $s['vk_token'] !== '';
     return $hasAuth && $hasToken;
+}
+
+/*
+ * Мягкая проверка прав секретов: если private/ или private/secrets.php читаются
+ * группой/остальными (0644, 0755 и шире), один раз пишем предупреждение в
+ * private/diag/secrets-perms.log. Работу не блокируем — на shared-хостингах
+ * права могут быть выставлены иначе, а схема с .htaccess уже закрывает доступ.
+ */
+function warn_secret_permissions(): void
+{
+    $wide = [];
+    foreach ([__DIR__ . '/private', __DIR__ . '/private/secrets.php'] as $path) {
+        if (!file_exists($path)) {
+            continue;
+        }
+        $perms = @fileperms($path);
+        if ($perms === false) {
+            continue;
+        }
+        if (($perms & 0o044) !== 0) {
+            $kind = is_dir($path) ? 'папка (рекомендуют 0700)' : 'файл (рекомендуют 0600)';
+            $wide[] = sprintf('%s: права %o — %s', $path, $perms & 0o777, $kind);
+        }
+    }
+    if ($wide === []) {
+        return;
+    }
+    $dir = __DIR__ . '/private/diag';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return;
+    }
+    $log = $dir . '/secrets-perms.log';
+    if (is_file($log)) {
+        return; // пишем предупреждение однократно
+    }
+    @file_put_contents($log, date('c') . ' ' . implode('; ', $wide) . "\n", LOCK_EX);
 }
 
 /* ---------------------------------------------------------------- session */
@@ -367,6 +439,8 @@ function action_session(array $s): void
 
 function action_login(array $s): void
 {
+    assert_same_origin();
+    require_method('POST');
     start_session();
 
     if (!secrets_ready($s)) {
@@ -397,8 +471,22 @@ function action_login(array $s): void
 
 function action_logout(): void
 {
+    assert_same_origin();
+    require_method('POST');
     start_session();
     $_SESSION = [];
+    // Гасим и саму cookie сессии, а не только серверные данные.
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', [
+            'expires'  => time() - 42000,
+            'path'     => $params['path'],
+            'domain'   => $params['domain'],
+            'secure'   => $params['secure'],
+            'httponly' => $params['httponly'],
+            'samesite' => $params['samesite'] !== '' ? $params['samesite'] : 'Lax',
+        ]);
+    }
     session_destroy();
     json_out(['authorized' => false]);
 }
@@ -1311,7 +1399,15 @@ function action_stacks(array $s): void
     }
 
     $userKey = ai_user_key($s);
-    $refresh = ($_GET['refresh'] ?? '') === '1';
+    // Пересборка — изменяющее состояние действие: только POST и со своего origin.
+    $body = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' ? request_body() : [];
+    $refreshRequested = ($_GET['refresh'] ?? '') !== '' || !empty($body['refresh']);
+    $refresh = false;
+    if ($refreshRequested) {
+        require_method('POST');
+        assert_same_origin();
+        $refresh = (string) ($body['refresh'] ?? $_GET['refresh'] ?? '') === '1';
+    }
     $cache = ai_read_cache($userKey);
     $fresh = $cache !== null && (time() - (int) $cache['built']) < AI_CACHE_TTL_SECONDS;
     if (!$refresh && $fresh) {
@@ -1352,7 +1448,7 @@ function action_stacks(array $s): void
         }
     } catch (Throwable $e) {
         log_error('stacks_fallback', $e);
-        fail(502, 'STACKS_FAILED', 'Не удалось собрать стопки: ' . $e->getMessage());
+        fail(502, 'STACKS_FAILED', 'Не удалось собрать стопки. Попробуйте позже.');
     } finally {
         if ($lock !== false) {
             fclose($lock);
@@ -1585,6 +1681,7 @@ function action_diag(): never
 /* ---------------------------------------------------------------- router */
 
 $secrets = load_secrets();
+warn_secret_permissions();
 $action = $_GET['action'] ?? 'session';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
