@@ -161,22 +161,59 @@ README.md
 :root {
   color-scheme: dark;
   --bg: #0f1115;
+  --backdrop: #1a2030;
   --surface: #181b22;
   --surface-2: #21252e;
+  --surface-3: #2c3240;
+  --tile-face: #242933;
   --border: #2a2f3a;
+  --edge: #0e1116;
   --text: #e7e9ee;
   --muted: #9aa3b2;
   --accent: #4c8bf5;
   --accent-strong: #2f6ae0;
   --danger: #f2555a;
+  --danger-text: #ffb4b7;
+  --on-accent: #fff;
+  --accent-glow: rgba(76, 139, 245, 0.25);
+  --accent-ring: rgba(76, 139, 245, 0.35);
+  --accent-shadow: rgba(47, 106, 224, 0.4);
+  --danger-bg: rgba(242, 85, 90, 0.18);
+  --danger-border: rgba(242, 85, 90, 0.45);
+  --highlight: rgba(255, 255, 255, 0.05);
+  --highlight-strong: rgba(255, 255, 255, 0.07);
+  --scrim: rgba(0, 0, 0, 0.85);
+  --scrim-soft: rgba(24, 27, 34, 0.6);
+  --panel-veil: rgba(33, 37, 46, 0.82);
+  --menu-veil: rgba(43, 49, 60, 0.95);
+  --thumb-mask: #000;
   /* Умеренный скевоморфизм: глубина панелей и «фаска» кнопок. */
   --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.4), 0 12px 28px rgba(0, 0, 0, 0.35);
-  --highlight: rgba(255, 255, 255, 0.05);
+  --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-btn-active: inset 0 2px 5px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-stack: 0 6px 16px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 20px 80px rgba(0, 0, 0, 0.6);
+  --shadow-dialog: 0 20px 60px rgba(0, 0, 0, 0.45);
+  --shadow-accent: 0 8px 24px rgba(76, 139, 245, 0.28);
+  /* Скевоморфные градиенты и границы кнопок/панелей. */
+  --btn-face: linear-gradient(180deg, #2b313c, #222731);
+  --btn-face-hover: linear-gradient(180deg, #343b48, #272d38);
+  --btn-face-active: linear-gradient(180deg, #1f242c, #262c36);
+  --btn-face-flat: #2b313c;
+  --btn-accent: linear-gradient(180deg, #3a6fd8, #2f5fbf);
+  --btn-edge-hover: #3a4150;
+  --panel-face: linear-gradient(180deg, #222731, #1c2028);
+  --panel-face-menu: linear-gradient(180deg, #232833, #1a1f27);
+  --panel-face-soft: linear-gradient(180deg, #1e222a, #191d24);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 ```
+
+Вне `:root` магических хексов/rgba быть не должно — только `var(--...)`. Это
+проверяется грепом в ревью: ни один hex/rgba не встречается ниже блока `:root`.
 
 **Тёмная тема — по умолчанию и единственная:** `color-scheme: dark`; синхронно
 задаём `<meta name="theme-color" content="#0f1115">` и цвета в `site.webmanifest`.
