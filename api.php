@@ -653,24 +653,90 @@ function ai_chat_once(array $cfg, array $messages, array $extra, bool $relaxSsl)
         $msg = (string) ($json['error']['message'] ?? json_encode($json['error'], JSON_UNESCAPED_UNICODE));
         throw new RuntimeException('ИИ-провайдер: ' . $msg);
     }
-    $message = $json['choices'][0]['message'] ?? null;
-    $content = is_array($message) ? ($message['content'] ?? '') : '';
-    if (is_array($content)) { // некоторые провайдеры отдают content списком частей
-        $text = '';
-        foreach ($content as $part) {
-            if (is_array($part) && isset($part['text']) && is_string($part['text'])) {
-                $text .= $part['text'];
-            } elseif (is_string($part)) {
-                $text .= $part;
-            }
-        }
-        $content = $text;
-    }
-    $content = is_string($content) ? trim($content) : '';
+    $content = ai_extract_text($json);
     if ($content === '') {
-        throw new RuntimeException('ИИ-провайдер вернул пустой ответ');
+        ai_dump_empty($body);
+        $finish = (string) ($json['choices'][0]['finish_reason'] ?? $json['finish_reason'] ?? '?');
+        throw new RuntimeException(
+            'ИИ-провайдер вернул пустой ответ (finish_reason=' . $finish . '). '
+            . 'Детали сохранены в private/diag/ai-empty.json — пришлите их.',
+        );
     }
     return $content;
+}
+
+/* Достаём текст ответа из любого распространённого формата: OpenAI chat
+ * (choices[].message.content строка или список частей), completions-стиль
+ * (choices[].text), а также обёртки Gemini/прочих (choices[].candidates[].output_text). */
+function ai_extract_text(array $json): string
+{
+    $choices = $json['choices'] ?? null;
+    if (is_array($choices)) {
+        foreach ($choices as $ch) {
+            if (!is_array($ch)) {
+                continue;
+            }
+            $msg = $ch['message'] ?? null;
+            if (is_array($msg)) {
+                $c = $msg['content'] ?? '';
+                if (is_array($c)) {
+                    $parts = '';
+                    foreach ($c as $part) {
+                        if (is_array($part) && isset($part['text']) && is_string($part['text'])) {
+                            $parts .= $part['text'];
+                        } elseif (is_string($part)) {
+                            $parts .= $part;
+                        }
+                    }
+                    $c = $parts;
+                }
+                if (is_string($c) && trim($c) !== '') {
+                    return trim($c);
+                }
+                if (is_string($msg['text'] ?? null) && trim($msg['text']) !== '') {
+                    return trim($msg['text']);
+                }
+            }
+            if (is_string($ch['text'] ?? null) && trim($ch['text']) !== '') {
+                return trim($ch['text']);
+            }
+            if (is_array($ch['candidates'] ?? null)) {
+                foreach ($ch['candidates'] as $cd) {
+                    if (!is_array($cd)) {
+                        continue;
+                    }
+                    if (is_string($cd['output_text'] ?? null) && trim($cd['output_text']) !== '') {
+                        return trim($cd['output_text']);
+                    }
+                    if (is_array($cd['content'] ?? null)) {
+                        foreach ($cd['content'] as $part) {
+                            if (is_array($part) && is_string($part['text'] ?? null) && trim($part['text']) !== '') {
+                                return trim($part['text']);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (is_string($json['output_text'] ?? null) && trim($json['output_text']) !== '') {
+        return trim($json['output_text']);
+    }
+    return '';
+}
+
+/* Сохраняем сырое тело пустого ответа для разбора причины (finish_reason,
+ * safety-фильтр, перекос формата). Ротируем: держим один новый и один старый файл. */
+function ai_dump_empty(string $body): void
+{
+    $dir = __DIR__ . '/private/diag';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return;
+    }
+    if (is_file($dir . '/ai-empty.json')) {
+        @rename($dir . '/ai-empty.json', $dir . '/ai-empty.old.json');
+    }
+    @file_put_contents($dir . '/ai-empty.json', $body);
 }
 
 function ai_chat(array $cfg, array $messages): string
