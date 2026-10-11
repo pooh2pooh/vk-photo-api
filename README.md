@@ -220,7 +220,7 @@ Pages, Netlify и т.п.) — загрузчик переберёт их по о
 ```php
 'ai_api_key'  => '…',   // ключ провайдера
 'ai_base_url' => 'https://generativelanguage.googleapis.com/v1beta/openai',
-'ai_model'    => 'gemini-2.5-flash', // пример; сверяй актуальный id на freellm.net
+'ai_model'    => 'gemini-3.8-flash', // пример; сверяй актуальный id на freellm.net
 ```
 
 (или переменные окружения `VK_PHOTO_AI_KEY` / `VK_PHOTO_AI_BASE_URL` /

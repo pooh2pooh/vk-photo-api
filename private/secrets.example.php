@@ -27,7 +27,7 @@ return [
     // Отправка картинок: OpenAI-совместимый /chat/completions.
     //   'ai_api_key'    => '',
     //   'ai_base_url'   => 'https://generativelanguage.googleapis.com/v1beta/openai',
-    //   'ai_model'      => 'gemini-2.5-flash',
+    //   'ai_model'      => 'gemini-3.8-flash',
 
     // Настройки (опционально):
     'api_version' => '5.199',

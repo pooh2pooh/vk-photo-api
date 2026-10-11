@@ -470,7 +470,7 @@ function ai_config(array $s): array
 {
     return [
         'base'  => rtrim((string) ($s['ai_base_url'] ?? 'https://generativelanguage.googleapis.com/v1beta/openai'), '/'),
-        'model' => (string) ($s['ai_model'] ?? 'gemini-2.5-flash'),
+        'model' => (string) ($s['ai_model'] ?? 'gemini-3.8-flash'),
         'key'   => (string) ($s['ai_api_key'] ?? ''),
         'ready' => isset($s['ai_api_key']) && (string) $s['ai_api_key'] !== '',
     ];
