@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ApiError, GROUP_AUTH_ERROR_CODE } from "../api/client.js";
 import { PAGE_SIZE_DENSE, PAGE_SIZE_NORMAL, isDenseSize } from "../api/config.js";
 import { usePhotos, usePageSize } from "../hooks/usePhotos.js";
+import { IconGridLarge, IconGridSmall, IconLogout, IconRefresh } from "./icons.js";
 import { Lightbox } from "./Lightbox.js";
 import { Pagination } from "./Pagination.js";
 import { PhotoCard } from "./PhotoCard.js";
@@ -36,8 +37,13 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
   }, [busy]);
 
   const toggleDense = () => {
-    setPageSize(dense ? PAGE_SIZE_NORMAL : PAGE_SIZE_DENSE);
-    setPage(1);
+    const nextSize = dense ? PAGE_SIZE_NORMAL : PAGE_SIZE_DENSE;
+    // Страница сохраняется при смене вида: тот же номер, только если он есть
+    // в новом разбиении (иначе — ближайшая доступная), без сброса на первую.
+    const total = query.data?.total ?? 0;
+    const maxPage = total > 0 ? Math.max(1, Math.ceil(total / nextSize)) : 1;
+    setPageSize(nextSize);
+    setPage((current) => Math.min(current, maxPage));
   };
 
   return (
@@ -53,18 +59,32 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
         </div>
         <button
           type="button"
-          className="gallery__density"
+          className="gallery__density icon-button"
           onClick={toggleDense}
           aria-pressed={dense}
-          title={dense ? "Вернуть крупные превью" : `Обзор: показать по ${PAGE_SIZE_DENSE} фото с мелкими превью`}
+          aria-label={dense ? "Обычный вид" : "Обзор"}
+          title={dense ? "Обычный вид: вернуть крупные превью" : `Обзор: показать по ${PAGE_SIZE_DENSE} фото с мелкими превью`}
         >
-          {dense ? "Обычный вид" : "Обзор"}
+          {dense ? <IconGridLarge /> : <IconGridSmall />}
         </button>
-        <button type="button" className="gallery__refresh" onClick={() => query.refetch()} disabled={busy}>
-          Обновить
+        <button
+          type="button"
+          className="gallery__refresh icon-button"
+          onClick={() => query.refetch()}
+          disabled={busy}
+          aria-label="Обновить"
+          title="Обновить"
+        >
+          <IconRefresh />
         </button>
-        <button type="button" className="gallery__logout" onClick={onLogout}>
-          Выйти
+        <button
+          type="button"
+          className="gallery__logout icon-button"
+          onClick={onLogout}
+          aria-label="Выйти"
+          title="Выйти"
+        >
+          <IconLogout />
         </button>
       </header>
 

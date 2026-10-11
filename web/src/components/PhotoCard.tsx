@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Photo } from "../api/types.js";
+import { dragPhoto } from "../dragPhoto.js";
 
 interface PhotoCardProps {
   photo: Photo;
@@ -20,6 +21,8 @@ export function PhotoCard({ photo, onOpen }: PhotoCardProps) {
       style={{ flexGrow: ratio }}
       onClick={() => onOpen(photo)}
       aria-label={photo.text || `Фото ${photo.id}`}
+      draggable
+      onDragStart={(event) => dragPhoto(event, photo)}
     >
       {src && !failed ? (
         <img
@@ -27,6 +30,7 @@ export function PhotoCard({ photo, onOpen }: PhotoCardProps) {
           alt={photo.text}
           loading="lazy"
           decoding="async"
+          draggable={false}
           className={loaded ? "is-loaded" : undefined}
           onLoad={() => setLoaded(true)}
           onError={() => setFailed(true)}

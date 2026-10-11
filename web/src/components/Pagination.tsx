@@ -1,3 +1,5 @@
+import { IconChevronLeft, IconChevronRight } from "./icons.js";
+
 interface PaginationProps {
   page: number;
   totalPages: number;
@@ -36,8 +38,15 @@ export function Pagination({ page, totalPages, onChange, disabled }: PaginationP
 
   return (
     <nav className="pagination" aria-label="Пагинация">
-      <button type="button" onClick={() => go(page - 1)} disabled={disabled || page <= 1}>
-        ← Назад
+      <button
+        type="button"
+        className="icon-button"
+        onClick={() => go(page - 1)}
+        disabled={disabled || page <= 1}
+        aria-label="Предыдущая страница"
+        title="Назад"
+      >
+        <IconChevronLeft />
       </button>
 
       {tokens.map((token, index) =>
@@ -59,8 +68,15 @@ export function Pagination({ page, totalPages, onChange, disabled }: PaginationP
         ),
       )}
 
-      <button type="button" onClick={() => go(page + 1)} disabled={disabled || page >= totalPages}>
-        Вперёд →
+      <button
+        type="button"
+        className="icon-button"
+        onClick={() => go(page + 1)}
+        disabled={disabled || page >= totalPages}
+        aria-label="Следующая страница"
+        title="Вперёд"
+      >
+        <IconChevronRight />
       </button>
     </nav>
   );

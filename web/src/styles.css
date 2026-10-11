@@ -310,6 +310,34 @@ button {
   background: rgba(76, 139, 245, 0.18);
 }
 
+/* Кнопки-иконки: квадратные, с контурным SVG по центру. */
+.gallery__header button.icon-button,
+.pagination button.icon-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gallery__header button.icon-button svg,
+.pagination button.icon-button svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+/* Карточку с фото можно перетаскивать, чтобы сохранить или поделиться. */
+.photo-card[draggable="true"] {
+  cursor: grab;
+}
+
+.photo-card[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 /* ---------------------------------------------------------------- loading bar */
 
 .loading-bar {
@@ -553,6 +581,8 @@ button {
   overflow: hidden;
   display: grid;
   place-items: center;
+  /* Горизонтальные свайпы листают фото, а не скроллят страницу. */
+  touch-action: none;
 }
 
 .lightbox__stage img {
@@ -687,10 +717,14 @@ button {
     #000 calc(100% - var(--thumb-fade)),
     transparent 100%
   );
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Один непрерывный трек: сдвигаем его так, чтобы активная миниатюра была
-   строго по центру. Число элементов постоянно, движение — плавное. */
+   строго по центру. Число элементов постоянно, движение — плавное.
+   В момент перетаскивания пальцем добавляется временный сдвиг --drag. */
 .lightbox__track {
   position: absolute;
   top: 6px;
@@ -698,8 +732,13 @@ button {
   display: flex;
   gap: var(--thumb-gap);
   will-change: transform;
-  transform: translateX(calc(-1 * (var(--i) * var(--thumb-step) + var(--thumb-size) / 2)));
+  transform: translateX(calc(-1 * (var(--i) * var(--thumb-step) + var(--thumb-size) / 2) + var(--drag, 0px)));
   transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Пока палец тянет ленту — трек движется строго за пальцем, без анимации. */
+.lightbox__track.is-dragging {
+  transition: none;
 }
 
 .lightbox__thumb {
