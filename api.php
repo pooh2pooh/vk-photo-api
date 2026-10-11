@@ -543,62 +543,153 @@ function fetch_all_photos(array $s): array
     return $items;
 }
 
-function fetch_image_base64(string $url): ?string
+/* Скачивает картинку и возвращает data-URI (data:<mime>;base64,...).
+ * Проверяем первые байты, чтобы не отправить модели HTML-страницу
+ * вместо фото, и подставляем настоящий MIME (не только image/jpeg). */
+function image_data_uri(string $url): ?string
 {
     if (preg_match('#^https?://#i', $url) !== 1) {
         return null;
     }
     $ctx = stream_context_create([
         'http' => [
-            'timeout'       => 20,
-            'ignore_errors' => true,
-            'header'        => "User-Agent: vk-photo-gallery/1.0\r\n",
+            'timeout'         => 20,
+            'ignore_errors'   => true,
+            'follow_location' => 1,
+            'max_redirects'   => 4,
+            'header'          => "User-Agent: vk-photo-gallery/1.0\r\n",
         ],
     ]);
     $body = @file_get_contents($url, false, $ctx);
     if ($body === false || $body === '') {
         return null;
     }
-    return base64_encode($body);
+    $first = substr($body, 0, 12);
+    $mime = 'image/jpeg';
+    if (str_starts_with($first, "\xFF\xD8\xFF")) {
+        $mime = 'image/jpeg';
+    } elseif (str_starts_with($first, "\x89PNG")) {
+        $mime = 'image/png';
+    } elseif (str_starts_with($first, 'GIF8')) {
+        $mime = 'image/gif';
+    } elseif (str_starts_with($first, 'RIFF') && substr($first, 8, 4) === 'WEBP') {
+        $mime = 'image/webp';
+    } elseif (str_starts_with($first, 'BM')) { // BMP тоже картинка (напр. у хостингов-моков)
+        $mime = 'image/bmp';
+    } else {
+        return null; // не картинка — не тащим мусор в модель
+    }
+    return 'data:' . $mime . ';base64,' . base64_encode($body);
 }
 
-/* Вызов OpenAI-совместимого chat/completions; кидает RuntimeException при ошибке. */
-function ai_chat(array $cfg, array $messages): string
+/* Вызов OpenAI-совместимого chat/completions; возвращает текст ответа.
+ * Умеет ходить через cURL (на большинстве хостингов уже есть свои CA-сертификаты)
+ * или через stream-контекст; при транспортной ошибке повторяет с «ослабленным»
+ * SSL (проблемные CA у старых хостов) и без служебных параметров max_tokens/
+ * temperature — некоторые бесплатные модели их не принимают.
+ */
+function http_post(string $url, string $payload, array $headers, bool $relaxSsl): string
 {
-    $url = $cfg['base'] . '/chat/completions';
-    $payload = json_encode([
-        'model'       => $cfg['model'],
-        'messages'    => $messages,
-        'max_tokens'  => 4096,
-        'temperature' => 0.2,
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        $opts = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_TIMEOUT => 180,
+            CURLOPT_CONNECTTIMEOUT => 20,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 4,
+        ];
+        if ($relaxSsl) {
+            $opts[CURLOPT_SSL_VERIFYPEER] = false;
+            $opts[CURLOPT_SSL_VERIFYHOST] = 0;
+        }
+        curl_setopt_array($ch, $opts);
+        $body = curl_exec($ch);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($body === false) {
+            throw new RuntimeException('ИИ-провайдер недоступен' . ($err !== '' ? ': ' . $err : ''));
+        }
+        return (string) $body;
+    }
 
+    $http = [
+        'method'        => 'POST',
+        'timeout'       => 180,
+        'ignore_errors' => true,
+        'follow_location' => 1,
+        'header'        => implode("\r\n", $headers) . "\r\n",
+        'content'       => $payload,
+    ];
     $ctx = stream_context_create([
-        'http' => [
-            'method'        => 'POST',
-            'timeout'       => 180,
-            'ignore_errors' => true,
-            'header'        => "Authorization: Bearer " . $cfg['key'] . "\r\nContent-Type: application/json\r\n",
-            'content'       => $payload,
-        ],
+        'http' => $http,
+        'ssl'  => $relaxSsl ? ['verify_peer' => false, 'verify_peer_name' => false, 'allow_self_signed' => true] : [],
     ]);
     $body = @file_get_contents($url, false, $ctx);
     if ($body === false) {
-        throw new RuntimeException('не удалось связаться с ИИ-провайдером');
+        throw new RuntimeException('ИИ-провайдер недоступен (нет cURL и/или закрыт allow_url_fopen)');
     }
+    return (string) $body;
+}
+
+function ai_chat_once(array $cfg, array $messages, array $extra, bool $relaxSsl): string
+{
+    $payload = json_encode(
+        array_merge(['model' => $cfg['model'], 'messages' => $messages], $extra),
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+    );
+    $url = $cfg['base'] . '/chat/completions';
+    $headers = ['Authorization: Bearer ' . $cfg['key'], 'Content-Type: application/json'];
+
+    $body = http_post($url, $payload, $headers, $relaxSsl);
     $json = json_decode($body, true);
     if (!is_array($json)) {
         throw new RuntimeException('ИИ-провайдер вернул некорректный ответ');
     }
-    $err = $json['error']['message'] ?? null;
-    if ($err !== null) {
-        throw new RuntimeException('ИИ-провайдер: ' . $err);
+    if (isset($json['error']) && is_array($json['error'])) {
+        $msg = (string) ($json['error']['message'] ?? json_encode($json['error'], JSON_UNESCAPED_UNICODE));
+        throw new RuntimeException('ИИ-провайдер: ' . $msg);
     }
-    $content = $json['choices'][0]['message']['content'] ?? '';
-    if (!is_string($content) || trim($content) === '') {
+    $message = $json['choices'][0]['message'] ?? null;
+    $content = is_array($message) ? ($message['content'] ?? '') : '';
+    if (is_array($content)) { // некоторые провайдеры отдают content списком частей
+        $text = '';
+        foreach ($content as $part) {
+            if (is_array($part) && isset($part['text']) && is_string($part['text'])) {
+                $text .= $part['text'];
+            } elseif (is_string($part)) {
+                $text .= $part;
+            }
+        }
+        $content = $text;
+    }
+    $content = is_string($content) ? trim($content) : '';
+    if ($content === '') {
         throw new RuntimeException('ИИ-провайдер вернул пустой ответ');
     }
     return $content;
+}
+
+function ai_chat(array $cfg, array $messages): string
+{
+    $attempts = [
+        ['max_tokens' => 4096, 'temperature' => 0.2],
+        [],
+    ];
+    $last = null;
+    foreach ($attempts as $extra) {
+        for ($pass = 0; $pass < 2; $pass++) { // попытка с обычным и «мягким» SSL
+            try {
+                return ai_chat_once($cfg, $messages, $extra, $pass === 1);
+            } catch (RuntimeException $e) {
+                $last = $e;
+            }
+        }
+    }
+    throw $last ?? new RuntimeException('ИИ-провайдер не ответил');
 }
 
 function parse_ai_labels(string $content, array $expectedIds): array
@@ -709,11 +800,14 @@ function build_stacks(array $s, array $cfg): array
                 . '. Определи тему каждого, верни JSON {"labels":{...}}.',
         ]];
         foreach ($part as $p) {
-            $b64 = fetch_image_base64($p['url']);
-            if ($b64 === null) {
+            $dataUri = image_data_uri($p['url']);
+            if ($dataUri === null) {
                 continue;
             }
-            $content[] = ['type' => 'image_url', 'image_url' => ['url' => 'data:image/jpeg;base64,' . $b64]];
+            $content[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri]];
+        }
+        if (count($content) === 1) {
+            throw new RuntimeException('Не удалось скачать ни одной миниатюры VK для пакета #' . $i);
         }
         $messages = [
             ['role' => 'system', 'content' => $system],
@@ -846,6 +940,9 @@ function action_stacks(array $s): void
             @set_time_limit(900);
         }
         [$groups, $photos] = build_stacks($s, $cfg);
+    } catch (Throwable $e) {
+        log_error('stacks', $e);
+        fail(502, 'AI_FAILED', 'ИИ не смог собрать стопки: ' . $e->getMessage());
     } finally {
         if ($lock !== false) {
             fclose($lock);
@@ -1095,5 +1192,29 @@ try {
             fail(404, 'UNKNOWN_ACTION', 'Неизвестное действие');
     }
 } catch (Throwable $e) {
+    log_error($action, $e);
     fail(500, 'INTERNAL', 'Внутренняя ошибка сервера');
+}
+
+/* Диагностика: падение кладём в private/diag/errors.log, чтобы не выводить
+ * технические детали пользователю, но иметь их у себя. Файл ротируется. */
+function log_error(string $logAction, Throwable $e): void
+{
+    $dir = __DIR__ . '/private/diag';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return;
+    }
+    $entry = json_encode([
+        'time'    => date('c'),
+        'action'  => $logAction,
+        'class'   => get_class($e),
+        'message' => $e->getMessage(),
+        'file'    => $e->getFile(),
+        'line'    => $e->getLine(),
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+    $path = $dir . '/errors.log';
+    if (is_file($path) && filesize($path) > 1048576) {
+        @rename($path, $dir . '/errors.old.log');
+    }
+    @file_put_contents($path, $entry, LOCK_EX | FILE_APPEND);
 }
