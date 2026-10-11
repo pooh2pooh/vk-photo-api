@@ -298,7 +298,18 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
                 >
                   <span className="stack-card__covers">
                     {group.cover.length > 0
-                      ? group.cover.map((url) => <img key={url} src={url} alt="" loading="lazy" decoding="async" />)
+                      ? group.cover.map((url) => (
+                          <img
+                            key={url}
+                            src={url}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                            onError={(event) => {
+                              event.currentTarget.style.display = "none";
+                            }}
+                          />
+                        ))
                       : <span className="stack-card__cover-empty">—</span>}
                   </span>
                   <span className="stack-card__label">{group.label}</span>
