@@ -476,6 +476,170 @@ button {
   padding: 0 4px;
 }
 
+/* ---------------------------------------------------------------- stacks */
+
+.stacks {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  padding: 14px 16px 18px;
+  margin-bottom: 22px;
+}
+
+.stacks__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.stacks__title {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-weight: 600;
+}
+
+.stacks__actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.stacks__loading,
+.stacks__error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.stacks__loading p {
+  margin: 0;
+}
+
+.stacks__error-text {
+  margin: 0;
+  color: var(--danger, #f26d6d);
+}
+
+.stacks__empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+.stacks__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.stack-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 128px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.stack-card:hover {
+  border-color: var(--accent);
+  background: #242933;
+  transform: translateY(-2px);
+}
+
+.stack-card__covers {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: repeat(2, 1fr);
+  grid-auto-flow: column;
+  gap: 3px;
+  height: 52px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.stack-card__covers img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.stack-card__cover-empty {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.stack-card__label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stack-card__count {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* Панель активной стопки: шапка над сеткой. */
+.stack-active {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.stack-active__title {
+  flex: 1;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stack-active__count {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.stack-active__exit {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.stack-active__exit:hover {
+  background: #2b313c;
+  border-color: #3a4150;
+}
+
 /* ---------------------------------------------------------------- states */
 
 .state {

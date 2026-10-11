@@ -1,4 +1,4 @@
-import type { AuthResult, PhotosPage, SessionState } from "./types.js";
+import type { AuthResult, PhotosPage, SessionState, StackPhotosResult, StacksResult } from "./types.js";
 
 export class ApiError extends Error {
   constructor(
@@ -130,5 +130,21 @@ export function fetchPhotos(input: { offset: number; count: number }): Promise<P
     timeoutMs: PHOTOS_TIMEOUT_MS,
   });
 }
+
+/**
+ * Сборка «стопок» похожих фото идёт на сервере долго (первые раз — десятки
+ * секунд), поэтому таймаут заметно больше. Повторный вызов мгновенный (кэш).
+ */
+export const fetchStacks = (refresh?: boolean): Promise<StacksResult> =>
+  api<StacksResult>("stacks", {
+    params: refresh ? { refresh: 1 } : {},
+    timeoutMs: 300000,
+  });
+
+export const fetchStackPhotos = (gid: string): Promise<StackPhotosResult> =>
+  api<StackPhotosResult>("stack_photos", {
+    params: { gid },
+    timeoutMs: 60000,
+  });
 
 export const GROUP_AUTH_ERROR_CODE = "VK_27";

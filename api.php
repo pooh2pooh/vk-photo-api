@@ -96,6 +96,15 @@ function load_secrets(): array
     if (($pass = $env('VK_PHOTO_PASSWORD')) !== null) {
         $fromFile['password'] = $pass;
     }
+    if (($key = $env('VK_PHOTO_AI_KEY')) !== null) {
+        $fromFile['ai_api_key'] = $key;
+    }
+    if (($base = $env('VK_PHOTO_AI_BASE_URL')) !== null) {
+        $fromFile['ai_base_url'] = $base;
+    }
+    if (($model = $env('VK_PHOTO_AI_MODEL')) !== null) {
+        $fromFile['ai_model'] = $model;
+    }
 
     return $fromFile;
 }
@@ -433,6 +442,480 @@ function action_photos(array $s): void
     json_out($result);
 }
 
+/* ---------------------------------------------------------------- AI stacks */
+
+/*
+ * «Стопки» — группировка похожих фото глазами ИИ. Пайплайн:
+ *  1) скачиваем ВСЕ фото альбома (pages через photos.get);
+ *  2) миниатюры пакетами по AI_BATCH_SIZE отправляем в любую OpenAI-совместимую
+ *     vision-модель (базовый адрес и ключ в секретах), просим короткую тему;
+ *  3) локально склеиваем похожие темы в стопки (overlap токенов) и кэшируем.
+ * Модель выбирается на freellm.net; по умолчанию — бесплатная Gemini (AI Studio),
+ * но подходит любой провайдер: NVIDIA NIM, Groq, OpenRouter и т.п.
+ */
+const AI_BATCH_SIZE = 16;
+const AI_MAX_IMAGES = 2000;
+const AI_CACHE_TTL_SECONDS = 43200; // 12 часов — сборка идёт долго, без нужды не повторяем
+
+function ai_dir(): ?string
+{
+    $dir = __DIR__ . '/private/ai-cache';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return null;
+    }
+    return $dir;
+}
+
+function ai_config(array $s): array
+{
+    return [
+        'base'  => rtrim((string) ($s['ai_base_url'] ?? 'https://generativelanguage.googleapis.com/v1beta/openai'), '/'),
+        'model' => (string) ($s['ai_model'] ?? 'gemini-2.5-flash'),
+        'key'   => (string) ($s['ai_api_key'] ?? ''),
+        'ready' => isset($s['ai_api_key']) && (string) $s['ai_api_key'] !== '',
+    ];
+}
+
+function ai_user_key(array $s): string
+{
+    $user = (string) ($s['username'] ?? 'user');
+    return hash('sha256', $user . ':' . (string) ($s['vk_token'] ?? ''));
+}
+
+function ai_cache_path(string $userKey): string
+{
+    return __DIR__ . '/private/ai-cache/stacks-' . $userKey . '.json';
+}
+
+function ai_snapshot_path(string $userKey): string
+{
+    return __DIR__ . '/private/ai-cache/snapshot-' . $userKey . '.json';
+}
+
+function ai_read_cache(string $userKey): ?array
+{
+    $path = ai_cache_path($userKey);
+    if (!is_file($path)) {
+        return null;
+    }
+    $data = json_decode((string) file_get_contents($path), true);
+    return is_array($data) ? $data : null;
+}
+
+function ai_write_json(string $path, array $data): void
+{
+    $dir = dirname($path);
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return;
+    }
+    @file_put_contents($path, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+}
+
+/* Все фото альбома одной лентой (постранично, как в интерфейсе). */
+function fetch_all_photos(array $s): array
+{
+    $ownerId = isset($s['owner_id']) && $s['owner_id'] !== '' ? $s['owner_id'] : null;
+    $items = [];
+    $offset = 0;
+    $loops = 0;
+    while (count($items) < AI_MAX_IMAGES) {
+        $response = vk_call($s, 'photos.get', [
+            'album_id'    => ALBUM_ID,
+            'owner_id'    => $ownerId,
+            'offset'      => $offset,
+            'count'       => MAX_COUNT,
+            'photo_sizes' => 1,
+            'rev'         => 1,
+        ]);
+        $part = $response['items'] ?? [];
+        foreach ($part as $raw) {
+            $items[] = map_photo($raw);
+        }
+        $total = (int) ($response['count'] ?? 0);
+        if ($part === [] || $offset + count($part) >= $total) {
+            break;
+        }
+        $offset += count($part);
+        if (++$loops > 12) { // 12 + 1 страница = максимум ~13000 фото, хватит
+            break;
+        }
+    }
+    return $items;
+}
+
+function fetch_image_base64(string $url): ?string
+{
+    if (preg_match('#^https?://#i', $url) !== 1) {
+        return null;
+    }
+    $ctx = stream_context_create([
+        'http' => [
+            'timeout'       => 20,
+            'ignore_errors' => true,
+            'header'        => "User-Agent: vk-photo-gallery/1.0\r\n",
+        ],
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false || $body === '') {
+        return null;
+    }
+    return base64_encode($body);
+}
+
+/* Вызов OpenAI-совместимого chat/completions; кидает RuntimeException при ошибке. */
+function ai_chat(array $cfg, array $messages): string
+{
+    $url = $cfg['base'] . '/chat/completions';
+    $payload = json_encode([
+        'model'       => $cfg['model'],
+        'messages'    => $messages,
+        'max_tokens'  => 4096,
+        'temperature' => 0.2,
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+    $ctx = stream_context_create([
+        'http' => [
+            'method'        => 'POST',
+            'timeout'       => 180,
+            'ignore_errors' => true,
+            'header'        => "Authorization: Bearer " . $cfg['key'] . "\r\nContent-Type: application/json\r\n",
+            'content'       => $payload,
+        ],
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false) {
+        throw new RuntimeException('не удалось связаться с ИИ-провайдером');
+    }
+    $json = json_decode($body, true);
+    if (!is_array($json)) {
+        throw new RuntimeException('ИИ-провайдер вернул некорректный ответ');
+    }
+    $err = $json['error']['message'] ?? null;
+    if ($err !== null) {
+        throw new RuntimeException('ИИ-провайдер: ' . $err);
+    }
+    $content = $json['choices'][0]['message']['content'] ?? '';
+    if (!is_string($content) || trim($content) === '') {
+        throw new RuntimeException('ИИ-провайдер вернул пустой ответ');
+    }
+    return $content;
+}
+
+function parse_ai_labels(string $content, array $expectedIds): array
+{
+    $t = trim($content);
+    if (preg_match('/```(?:json)?\s*(.+?)\s*```/s', $t, $m)) {
+        $t = $m[1];
+    }
+    $data = json_decode($t, true);
+    if (!is_array($data) && preg_match('/\{.*\}/s', $t, $m2)) {
+        $data = json_decode($m2[0], true);
+    }
+    $out = [];
+    if (is_array($data) && isset($data['labels']) && is_array($data['labels'])) {
+        foreach ($data['labels'] as $id => $label) {
+            if (is_string($label) && in_array((string) $id, $expectedIds, true)) {
+                $out[(string) $id] = $label;
+            }
+        }
+    }
+    return $out;
+}
+
+function u_len(string $s): int
+{
+    return function_exists('mb_strlen') ? mb_strlen($s, 'UTF-8') : strlen($s);
+}
+
+/* Короткая тема -> набор значимых слов. */
+function label_tokens(string $label): array
+{
+    $t = function_exists('mb_strtolower') ? mb_strtolower($label, 'UTF-8') : strtolower($label);
+    $t = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $t) ?? $t;
+    $words = preg_split('/\s+/u', trim($t)) ?: [];
+    $words = array_filter($words, function (string $w): bool {
+        return u_len($w) >= 3 && preg_match('/^[0-9]+$/', $w) !== 1;
+    });
+    return array_values(array_unique($words));
+}
+
+function token_overlap(array $a, array $b): float
+{
+    if ($a === [] || $b === []) {
+        return 0.0;
+    }
+    $inter = count(array_intersect($a, $b));
+    $union = count($a) + count($b) - $inter;
+    return $union > 0 ? $inter / $union : 0.0;
+}
+
+/* Самая частая тема в стопке. */
+function pick_label(array $counts): string
+{
+    $best = '';
+    $bestN = -1;
+    foreach ($counts as $label => $n) {
+        if ($n > $bestN || ($n === $bestN && ($best === '' || strcmp($label, $best) < 0))) {
+            $best = $label;
+            $bestN = $n;
+        }
+    }
+    return $best === '' ? 'без названия' : $best;
+}
+
+/* Строит стопки: возвращает [groups, photos]. Годится для любых OpenAI-моделей. */
+function build_stacks(array $s, array $cfg): array
+{
+    $photos = fetch_all_photos($s);
+    $total = count($photos);
+    if ($total === 0) {
+        return [[], $photos];
+    }
+
+    // Составляем пакеты изображений. Для качества берём чуть более крупные
+    // размеры на небольших альбомах, на больших — быстрые миниатюры.
+    $batch = [];
+    $idToKey = [];
+    $photoByKey = [];
+    $keysWithUrl = [];
+    foreach ($photos as $index => $photo) {
+        $key = $photo['ownerId'] . '_' . $photo['id'];
+        $url = $total <= 500
+            ? ($photo['displayUrl'] ?? $photo['thumbnailUrl'])
+            : ($photo['thumbnailUrl'] ?? $photo['displayUrl']);
+        if (!$url) {
+            continue;
+        }
+        $idToKey[(string) $photo['id']] = $key;
+        $photoByKey[$key] = $index;
+        $keysWithUrl[] = $key;
+        $batch[] = ['key' => $key, 'id' => (int) $photo['id'], 'url' => $url];
+    }
+
+    $system = 'Ты помогаешь разложить фотографии по стопкам похожих. '
+        . 'Тебе дадут изображения и их идентификаторы по порядку. Для КАЖДОГО идентификатора придумай '
+        . 'короткую тему из 1–4 слов (например: «пляж закат», «рыжий кот», «скриншот чата», «мем с котом»). '
+        . 'Одинаковые по содержанию фото получают одинаковую или почти одинаковую тему. '
+        . 'Ответь ТОЛЬКО валидным JSON без оформления: {"labels":{"<id>":"тема",...}} Никаких пояснений.';
+
+    $labelByKey = [];
+    for ($i = 0, $n = count($batch); $i < $n; $i += AI_BATCH_SIZE) {
+        $part = array_slice($batch, $i, AI_BATCH_SIZE);
+        $ids = array_map(fn (array $p): int => $p['id'], $part);
+        $idsText = implode(', ', $ids);
+        $content = [[
+            'type' => 'text',
+            'text' => 'Идентификаторы изображений по порядку: ' . $idsText
+                . '. Определи тему каждого, верни JSON {"labels":{...}}.',
+        ]];
+        foreach ($part as $p) {
+            $b64 = fetch_image_base64($p['url']);
+            if ($b64 === null) {
+                continue;
+            }
+            $content[] = ['type' => 'image_url', 'image_url' => ['url' => 'data:image/jpeg;base64,' . $b64]];
+        }
+        $messages = [
+            ['role' => 'system', 'content' => $system],
+            ['role' => 'user', 'content' => $content],
+        ];
+
+        $labels = [];
+        $lastError = null;
+        for ($attempt = 0; $attempt < 3 && $labels === []; $attempt++) {
+            try {
+                $labels = parse_ai_labels(ai_chat($cfg, $messages), array_map('strval', $ids));
+            } catch (Throwable $e) {
+                $lastError = $e;
+                usleep(500_000 * ($attempt + 1));
+            }
+        }
+        if ($labels === []) {
+            throw $lastError ?? new RuntimeException('ИИ не вернул темы для пакета');
+        }
+        foreach ($labels as $id => $label) {
+            $key = $idToKey[$id] ?? null;
+            if ($key !== null) {
+                $labelByKey[$key] = $label;
+            }
+        }
+    }
+
+    // Склейка в стопки: похожие темы (>34% общих слов) накапливаем в одну кучу.
+    $clusters = [];
+    foreach ($labelByKey as $key => $label) {
+        $tokens = label_tokens($label);
+        $best = -1;
+        $bestScore = 0.0;
+        foreach ($clusters as $ci => $cluster) {
+            $score = token_overlap($tokens, $cluster['tokens']);
+            if ($score > 0.34 && $score > $bestScore) {
+                $best = $ci;
+                $bestScore = $score;
+            }
+        }
+        if ($best >= 0) {
+            $clusters[$best]['tokens'] = array_values(array_unique(array_merge($clusters[$best]['tokens'], $tokens)));
+            $clusters[$best]['labels'][$label] = ($clusters[$best]['labels'][$label] ?? 0) + 1;
+            $clusters[$best]['photos'][] = $key;
+        } else {
+            $clusters[] = ['tokens' => $tokens, 'labels' => [$label => 1], 'photos' => [$key]];
+        }
+    }
+
+    $groups = [];
+    $gid = 0;
+    foreach ($clusters as $cluster) {
+        $gid++;
+        $keys = $cluster['photos'];
+        $cover = [];
+        foreach (array_slice($keys, 0, 3) as $key) {
+            $thumb = $photos[$photoByKey[$key]]['thumbnailUrl'] ?? null;
+            if ($thumb) {
+                $cover[] = $thumb;
+            }
+        }
+        $groups[] = [
+            'gid'    => 's' . $gid,
+            'label'  => pick_label($cluster['labels']),
+            'count'  => count($keys),
+            'cover'  => $cover,
+            'photos' => array_map(function (string $key): array {
+                [$own, $id] = explode('_', $key, 2);
+                return ['ownerId' => (int) $own, 'id' => (int) $id];
+            }, $keys),
+        ];
+    }
+    usort($groups, fn (array $a, array $b): int => $b['count'] <=> $a['count'] ?: strcmp($a['label'], $b['label']));
+    unset($keysWithUrl, $idToKey);
+
+    return [$groups, $photos];
+}
+
+function ai_public(array $cache): array
+{
+    if (isset($cache['public']) && is_array($cache['public'])) {
+        return $cache['public'];
+    }
+    return [
+        'configured' => true,
+        'built'      => (int) ($cache['built'] ?? 0),
+        'total'      => (int) ($cache['total'] ?? 0),
+        'groups'     => array_map(fn (array $g): array => [
+            'gid'   => (string) $g['gid'],
+            'label' => (string) $g['label'],
+            'count' => (int) $g['count'],
+            'cover' => $g['cover'] ?? [],
+        ], $cache['groups'] ?? []),
+    ];
+}
+
+function action_stacks(array $s): void
+{
+    require_auth();
+    $cfg = ai_config($s);
+    if (!$cfg['ready']) {
+        fail(503, 'AI_NOT_CONFIGURED',
+            'ИИ не настроен: впишите ключ (ai_api_key), базовый URL (ai_base_url) и модель (ai_model) в private/secrets.php. '
+            . 'Бесплатные модели — на freellm.net (например, Gemini AI Studio).');
+    }
+    if (ai_dir() === null) {
+        fail(503, 'AI_CACHE_UNAVAILABLE', 'Недоступна папка для кэша ИИ');
+    }
+
+    $userKey = ai_user_key($s);
+    $refresh = ($_GET['refresh'] ?? '') === '1';
+    $cache = ai_read_cache($userKey);
+    $fresh = $cache !== null && (time() - (int) $cache['built']) < AI_CACHE_TTL_SECONDS;
+    if (!$refresh && $fresh) {
+        json_out(ai_public($cache));
+    }
+
+    // Пока один запрос собирает стопки, второй ждёт — не множим тяжёлые сборки.
+    $lockPath = ai_dir() . '/build-' . $userKey . '.lock';
+    $lock = @fopen($lockPath, 'c+');
+    if ($lock !== false && !flock($lock, LOCK_EX | LOCK_NB)) {
+        fclose($lock);
+        if ($cache !== null) {
+            json_out(ai_public($cache)); // сборка уже идёт, отдаём прошлый результат
+        }
+        fail(503, 'AI_BUILDING', 'Стопки уже собираются, попробуйте через минуту');
+    }
+    try {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(900);
+        }
+        [$groups, $photos] = build_stacks($s, $cfg);
+    } finally {
+        if ($lock !== false) {
+            fclose($lock);
+        }
+    }
+
+    $now = time();
+    $public = [
+        'configured' => true,
+        'built'      => $now,
+        'total'      => count($photos),
+        'groups'     => array_map(fn (array $g): array => [
+            'gid'   => $g['gid'],
+            'label' => $g['label'],
+            'count' => $g['count'],
+            'cover' => $g['cover'],
+        ], $groups),
+    ];
+    $cacheData = [
+        'built'  => $now,
+        'total'  => count($photos),
+        'groups' => $groups,
+        'public' => $public,
+    ];
+    ai_write_json(ai_cache_path($userKey), $cacheData);
+    ai_write_json(ai_snapshot_path($userKey), ['built' => $now, 'total' => count($photos), 'photos' => $photos]);
+    json_out($public);
+}
+
+function action_stack_photos(array $s): void
+{
+    require_auth();
+    $gid = (string) ($_GET['gid'] ?? '');
+    if ($gid === '') {
+        fail(400, 'VALIDATION_FAILED', 'Не указана стопка (gid)');
+    }
+    $userKey = ai_user_key($s);
+    $cache = ai_read_cache($userKey);
+    if ($cache === null) {
+        fail(404, 'AI_NO_STACKS', 'Стопки ещё не собраны — нажмите кнопку «Стопки»');
+    }
+    $group = null;
+    foreach ($cache['groups'] as $g) {
+        if ($g['gid'] === $gid) {
+            $group = $g;
+            break;
+        }
+    }
+    if ($group === null) {
+        fail(404, 'AI_NO_GROUP', 'Стопка не найдена');
+    }
+
+    $snapshotPath = ai_snapshot_path($userKey);
+    $snapshot = is_file($snapshotPath) ? json_decode((string) file_get_contents($snapshotPath), true) : null;
+    $photos = is_array($snapshot) && isset($snapshot['photos']) && is_array($snapshot['photos'])
+        ? $snapshot['photos']
+        : [];
+
+    $items = [];
+    foreach ($group['photos'] as $ref) {
+        foreach ($photos as $photo) {
+            if ((int) $photo['id'] === (int) $ref['id'] && (int) $photo['ownerId'] === (int) $ref['ownerId']) {
+                $items[] = $photo;
+                break;
+            }
+        }
+    }
+    json_out(['label' => $group['label'], 'count' => $group['count'], 'items' => $items]);
+}
+
 /* ---------------------------------------------------------------- static assets */
 
 /*
@@ -604,6 +1087,10 @@ try {
             action_logout();
         case 'photos':
             action_photos($secrets);
+        case 'stacks':
+            action_stacks($secrets);
+        case 'stack_photos':
+            action_stack_photos($secrets);
         default:
             fail(404, 'UNKNOWN_ACTION', 'Неизвестное действие');
     }

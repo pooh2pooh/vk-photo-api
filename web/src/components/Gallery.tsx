@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import { ApiError, GROUP_AUTH_ERROR_CODE } from "../api/client.js";
+import { useCallback, useEffect, useState } from "react";
+import { ApiError, GROUP_AUTH_ERROR_CODE, fetchStackPhotos, fetchStacks } from "../api/client.js";
+import type { StackGroup, StackPhotosResult, StacksResult } from "../api/types.js";
 import { PAGE_SIZE_DENSE, PAGE_SIZE_NORMAL, isDenseSize } from "../api/config.js";
 import { usePhotos, usePageSize } from "../hooks/usePhotos.js";
-import { IconGridLarge, IconGridSmall, IconLogout, IconRefresh } from "./icons.js";
+import { IconGridLarge, IconGridSmall, IconLayers, IconLogout, IconRefresh, IconX } from "./icons.js";
 import { Lightbox } from "./Lightbox.js";
 import { Pagination } from "./Pagination.js";
 import { PhotoCard } from "./PhotoCard.js";
@@ -19,6 +20,16 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [pageSize, setPageSize] = usePageSize();
   const query = usePhotos(page, pageSize);
+
+  // «Стопки» похожих фото + просмотр одной стопки.
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [stacks, setStacks] = useState<StacksResult | null>(null);
+  const [stacksLoading, setStacksLoading] = useState(false);
+  const [stacksError, setStacksError] = useState<string | null>(null);
+  const [stackView, setStackView] = useState<StackPhotosResult | null>(null);
+  const [stackTarget, setStackTarget] = useState<StackGroup | null>(null);
+  const [stackViewLoading, setStackViewLoading] = useState(false);
+  const [stackViewError, setStackViewError] = useState<string | null>(null);
 
   const items = query.data?.items ?? [];
   const dense = isDenseSize(pageSize);
@@ -46,6 +57,46 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
     setPage((current) => Math.min(current, maxPage));
   };
 
+  const loadStacks = useCallback(async (refresh = false) => {
+    setStacksLoading(true);
+    setStacksError(null);
+    try {
+      const result = await fetchStacks(refresh);
+      setStacks(result.configured ? result : null);
+      if (!result.configured) {
+        setStacksError("ИИ не настроен на сервере — см. private/secrets.php.");
+      }
+    } catch (error) {
+      setStacksError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStacksLoading(false);
+    }
+  }, []);
+
+  const toggleStacks = () => {
+    const next = !panelOpen;
+    setPanelOpen(next);
+    if (next && stacks === null && !stacksLoading) void loadStacks();
+  };
+
+  const openStack = useCallback(async (group: StackGroup) => {
+    setStackTarget(group);
+    setStackViewLoading(true);
+    setStackViewError(null);
+    try {
+      setStackView(await fetchStackPhotos(group.gid));
+    } catch (error) {
+      setStackViewError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStackViewLoading(false);
+    }
+  }, []);
+
+  const exitStack = () => {
+    setStackView(null);
+    setStackViewError(null);
+  };
+
   return (
     <section className="gallery" data-busy={busy ? "true" : "false"}>
       <header className="gallery__header">
@@ -57,6 +108,16 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
             {busy ? " · обновление…" : ""}
           </p>
         </div>
+        <button
+          type="button"
+          className="gallery__stacks icon-button"
+          onClick={toggleStacks}
+          aria-expanded={panelOpen}
+          aria-label="Стопки"
+          title="Стопки похожих фото"
+        >
+          <IconLayers />
+        </button>
         <button
           type="button"
           className="gallery__density icon-button"
@@ -94,7 +155,122 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
         </div>
       ) : null}
 
-      {query.isError ? (
+      {panelOpen ? (
+        <section className="stacks" aria-label="Стопки похожих фото">
+          <div className="stacks__head">
+            <p className="stacks__title">
+              <IconLayers width={16} height={16} />
+              <span>Стопки похожих фото</span>
+            </p>
+            <div className="stacks__actions">
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => void loadStacks(true)}
+                disabled={stacksLoading}
+                aria-label="Пересобрать стопки"
+                title="Пересобрать стопки"
+              >
+                <IconRefresh />
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setPanelOpen(false)}
+                aria-label="Скрыть панель стопок"
+                title="Скрыть"
+              >
+                <IconX />
+              </button>
+            </div>
+          </div>
+
+          {stacksLoading ? (
+            <div className="stacks__loading" role="status">
+              <span className="spinner" aria-hidden="true" />
+              <p>Собираю стопки… первый запуск может занять до нескольких минут.</p>
+            </div>
+          ) : stacksError ? (
+            <div className="stacks__error">
+              <p className="stacks__error-text">{stacksError}</p>
+              <button type="button" onClick={() => void loadStacks(true)}>
+                Повторить
+              </button>
+            </div>
+          ) : stacks && stacks.groups.length === 0 ? (
+            <p className="stacks__empty">Похожих фотографий пока не нашлось.</p>
+          ) : stacks ? (
+            <div className="stacks__grid">
+              {stacks.groups.map((group) => (
+                <button
+                  key={group.gid}
+                  type="button"
+                  className="stack-card"
+                  onClick={() => void openStack(group)}
+                  aria-label={`Стопка «${group.label}», ${group.count} фото`}
+                >
+                  <span className="stack-card__covers">
+                    {group.cover.length > 0
+                      ? group.cover.map((url) => <img key={url} src={url} alt="" loading="lazy" decoding="async" />)
+                      : <span className="stack-card__cover-empty">—</span>}
+                  </span>
+                  <span className="stack-card__label">{group.label}</span>
+                  <span className="stack-card__count">{group.count}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {stackView ? (
+        <div className="stack-active">
+          <p className="stack-active__title">
+            <IconLayers width={16} height={16} />
+            <span>Стопка: {stackView.label}</span>
+            <span className="stack-active__count">
+              {stackView.count > stackView.items.length
+                ? `${stackView.items.length} из ${stackView.count}`
+                : stackView.items.length}
+            </span>
+          </p>
+          <button type="button" className="stack-active__exit" onClick={exitStack}>
+            Ко всем фото
+          </button>
+        </div>
+      ) : null}
+
+      {stackView || stackViewLoading ? (
+        stackViewLoading ? (
+          <div className={dense ? "grid grid--dense" : "grid"} aria-busy="true">
+            {Array.from({ length: Math.min(pageSize, MAX_SKELETONS) }).map((_, index) => (
+              <div key={index} className="photo-card photo-card--skeleton" />
+            ))}
+          </div>
+        ) : stackViewError ? (
+          <div className="state state--error">
+            <p>Не удалось открыть стопку.</p>
+            <p className="state__detail">{stackViewError}</p>
+            {stackTarget ? (
+              <button type="button" onClick={() => void openStack(stackTarget)}>
+                Повторить
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <div className={dense ? "grid grid--dense" : "grid"}>
+            {stackView
+              ? stackView.items.map((photo, index) => (
+                  <PhotoCard
+                    key={`${photo.ownerId}_${photo.id}`}
+                    photo={photo}
+                    onOpen={() => setSelectedIndex(index)}
+                  />
+                ))
+              : null}
+          </div>
+        )
+      ) : query.isError ? (
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
       ) : query.isLoading ? (
         <div className={dense ? "grid grid--dense" : "grid"} aria-busy="true">
@@ -116,24 +292,31 @@ export function Gallery({ onLogout, onSessionExpired }: GalleryProps) {
         </div>
       )}
 
-      <Pagination
-        page={page}
-        totalPages={totalPages}
-        onChange={(next) => {
-          setPage(next);
-          window.scrollTo({ top: 0, behavior: "smooth" });
-        }}
-        disabled={query.isFetching}
-      />
-
-      {selectedIndex !== null && items[selectedIndex] ? (
-        <Lightbox
-          photos={items}
-          index={selectedIndex}
-          onIndexChange={setSelectedIndex}
-          onClose={() => setSelectedIndex(null)}
+      {!stackView ? (
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          onChange={(next) => {
+            setPage(next);
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+          disabled={query.isFetching}
         />
       ) : null}
+
+      {(() => {
+        const lightboxItems = stackView ? stackView.items : items;
+        return (
+          selectedIndex !== null && lightboxItems[selectedIndex] ? (
+            <Lightbox
+              photos={lightboxItems}
+              index={selectedIndex}
+              onIndexChange={setSelectedIndex}
+              onClose={() => setSelectedIndex(null)}
+            />
+          ) : null
+        );
+      })()}
     </section>
   );
 }

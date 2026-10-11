@@ -26,3 +26,23 @@ export interface SessionState {
 export interface AuthResult {
   authorized: boolean;
 }
+
+export interface StackGroup {
+  gid: string;
+  label: string;
+  count: number;
+  cover: string[];
+}
+
+export interface StacksResult {
+  configured: boolean;
+  built?: number;
+  total?: number;
+  groups: StackGroup[];
+}
+
+export interface StackPhotosResult {
+  label: string;
+  count: number;
+  items: Photo[];
+}

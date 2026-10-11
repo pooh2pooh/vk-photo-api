@@ -22,6 +22,13 @@ return [
     // Персональный user-токен ВКонтакте (scope photos). Токен сообщества не подойдёт.
     'vk_token' => '',
 
+    // ИИ для «стопок» похожих фото (опционально). Бесплатные модели —
+    // каталог https://freellm.net/. По умолчанию — Gemini (AI Studio).
+    // Отправка картинок: OpenAI-совместимый /chat/completions.
+    //   'ai_api_key'    => '',
+    //   'ai_base_url'   => 'https://generativelanguage.googleapis.com/v1beta/openai',
+    //   'ai_model'      => 'gemini-2.5-flash',
+
     // Настройки (опционально):
     'api_version' => '5.199',
     // 'owner_id'  => '',           // пусто = владелец токена
