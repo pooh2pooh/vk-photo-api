@@ -28,6 +28,12 @@ return [
     //   'ai_api_key'    => '',
     //   'ai_base_url'   => 'https://generativelanguage.googleapis.com/v1beta/openai',
     //   'ai_model'      => 'gemini-3.8-flash',
+    //   'ai_batch'      => 64,         // картинок в одном запросе (от него зависит
+    //                                   // число запросов!). Бесплатная Gemini — 20
+    //                                   // запросов/сутки на модель: при 64 пакете
+    //                                   // сборка 1000 фото = 16 запросов. Gemma
+    //                                   // (короткий контекст) — ставь 8. Альтернатива:
+    //                                   // env VK_PHOTO_AI_BATCH.
 
     // Настройки (опционально):
     'api_version' => '5.199',

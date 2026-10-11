@@ -447,15 +447,23 @@ function action_photos(array $s): void
 /*
  * «Стопки» — группировка похожих фото глазами ИИ. Пайплайн:
  *  1) скачиваем ВСЕ фото альбома (pages через photos.get);
- *  2) миниатюры пакетами по AI_BATCH_SIZE отправляем в любую OpenAI-совместимую
- *     vision-модель (базовый адрес и ключ в секретах), просим короткую тему;
+ *  2) миниатюры пакетами (размер пакета — ai_batch, по умолчанию 64) отправляем
+ *     в любую OpenAI-совместимую vision-модель (базовый адрес и ключ в секретах),
+ *     просим короткую тему;
  *  3) локально склеиваем похожие темы в стопки (overlap токенов) и кэшируем.
  * Модель выбирается на freellm.net; по умолчанию — бесплатная Gemini (AI Studio),
  * но подходит любой провайдер: NVIDIA NIM, Groq, OpenRouter и т.п.
+ * Размер пакета подбирается под лимиты модели: бесплатная Gemini даёт 20 запросов
+ * в день на модель, поэтому пакет 64 → сборка 1000 фото = 16 запросов.
  */
-const AI_BATCH_SIZE = 16;
 const AI_MAX_IMAGES = 2000;
 const AI_CACHE_TTL_SECONDS = 43200; // 12 часов — сборка идёт долго, без нужды не повторяем
+
+/* Квота исчерпана (429/RESOURCE_EXHAUSTED) — ретраить бессмысленно (обычно
+ * «попробуйте через несколько часов»): короткозамким сразу с понятным текстом. */
+class AiQuotaExhausted extends RuntimeException
+{
+}
 
 function ai_dir(): ?string
 {
@@ -468,12 +476,31 @@ function ai_dir(): ?string
 
 function ai_config(array $s): array
 {
+    $model = (string) ($s['ai_model'] ?? 'gemini-3.8-flash');
     return [
         'base'  => rtrim((string) ($s['ai_base_url'] ?? 'https://generativelanguage.googleapis.com/v1beta/openai'), '/'),
-        'model' => (string) ($s['ai_model'] ?? 'gemini-3.8-flash'),
+        'model' => $model,
         'key'   => (string) ($s['ai_api_key'] ?? ''),
         'ready' => isset($s['ai_api_key']) && (string) $s['ai_api_key'] !== '',
+        'batch' => ai_batch($s, $model),
     ];
+}
+
+/* Размер пакета картинок в одном запросе: от него зависит число запросов.
+ * Лимит бесплатной Gemini — 20 запросов/день на модель, пакет 64 → 16 запросов
+ * на 1000 фото. Модели Gemma имеют короткий контекст (33K) — им пакет меньше.
+ * Переопределяется в secrets.php ключом ai_batch или env VK_PHOTO_AI_BATCH. */
+function ai_batch(array $s, string $model): int
+{
+    $v = $s['ai_batch'] ?? '';
+    if ($v === '' || $v === null) {
+        $env = getenv('VK_PHOTO_AI_BATCH');
+        $v = $env === false || $env === '' ? '' : (string) $env;
+    }
+    if ($v === '') {
+        $v = str_contains($model, 'gemma') ? 8 : 64;
+    }
+    return max(8, min(200, (int) $v));
 }
 
 function ai_user_key(array $s): string
@@ -651,6 +678,20 @@ function ai_chat_once(array $cfg, array $messages, array $extra, bool $relaxSsl)
     }
     if (isset($json['error']) && is_array($json['error'])) {
         $msg = (string) ($json['error']['message'] ?? json_encode($json['error'], JSON_UNESCAPED_UNICODE));
+        $status = (string) ($json['error']['status'] ?? '');
+        $lower = mb_strtolower($msg);
+        $isQuota = $status === 'RESOURCE_EXHAUSTED'
+            || (int) ($json['error']['code'] ?? 0) === 429
+            || str_contains($lower, 'quota')
+            || str_contains($lower, 'rate limit')
+            || str_contains($lower, 'too many requests');
+        if ($isQuota) {
+            $delay = ai_quota_delay($json);
+            $hint = $delay !== null
+                ? ('. Сброс ориентировочно через ' . ai_human_seconds($delay))
+                : '';
+            throw new AiQuotaExhausted('ИИ-провайдер: квота исчерпана' . $hint . ' – ' . $msg);
+        }
         throw new RuntimeException('ИИ-провайдер: ' . $msg);
     }
     $content = ai_extract_text($json);
@@ -739,10 +780,48 @@ function ai_dump_empty(string $body): void
     @file_put_contents($dir . '/ai-empty.json', $body);
 }
 
-function ai_chat(array $cfg, array $messages): string
+/* Из RetryInfo.details вытаскиваем retryDelay: "41609s" или ISO-8601 "PT11H33M29.9S". */
+function ai_quota_delay(array $json): ?int
+{
+    $details = $json['error']['details'] ?? null;
+    if (!is_array($details)) {
+        return null;
+    }
+    foreach ($details as $d) {
+        if (!is_array($d)) {
+            continue;
+        }
+        $v = $d['retryDelay'] ?? '';
+        if (!is_string($v)) {
+            continue;
+        }
+        if (preg_match('/^(\d+)(?:\.[\d]+)?s$/', $v, $m)) {
+            return (int) $m[1];
+        }
+        if (preg_match('/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/', $v, $m)) {
+            return (int) (((float) ($m[1] ?? 0) * 3600) + ((float) ($m[2] ?? 0) * 60) + (float) ($m[3] ?? 0));
+        }
+    }
+    return null;
+}
+
+function ai_human_seconds(int $seconds): string
+{
+    if ($seconds < 60) {
+        return $seconds . ' с';
+    }
+    $h = intdiv($seconds, 3600);
+    $m = intdiv($seconds % 3600, 60);
+    if ($h > 0) {
+        return $h . ' ч ' . ($m > 0 ? $m . ' мин' : '');
+    }
+    return $m . ' мин';
+}
+
+function ai_chat(array $cfg, array $messages, int $maxTokens = 4096): string
 {
     $attempts = [
-        ['max_tokens' => 4096, 'temperature' => 0.2],
+        ['max_tokens' => $maxTokens, 'temperature' => 0.2],
         [],
     ];
     $last = null;
@@ -750,6 +829,8 @@ function ai_chat(array $cfg, array $messages): string
         for ($pass = 0; $pass < 2; $pass++) { // попытка с обычным и «мягким» SSL
             try {
                 return ai_chat_once($cfg, $messages, $extra, $pass === 1);
+            } catch (AiQuotaExhausted $e) {
+                throw $e; // квота кончилась — не поможет ни формат, ни SSL
             } catch (RuntimeException $e) {
                 $last = $e;
             }
@@ -856,8 +937,8 @@ function build_stacks(array $s, array $cfg): array
         . 'Ответь ТОЛЬКО валидным JSON без оформления: {"labels":{"<id>":"тема",...}} Никаких пояснений.';
 
     $labelByKey = [];
-    for ($i = 0, $n = count($batch); $i < $n; $i += AI_BATCH_SIZE) {
-        $part = array_slice($batch, $i, AI_BATCH_SIZE);
+    for ($i = 0, $n = count($batch); $i < $n; $i += $cfg['batch']) {
+        $part = array_slice($batch, $i, $cfg['batch']);
         $ids = array_map(fn (array $p): int => $p['id'], $part);
         $idsText = implode(', ', $ids);
         $content = [[
@@ -880,12 +961,16 @@ function build_stacks(array $s, array $cfg): array
             ['role' => 'user', 'content' => $content],
         ];
 
+        $maxTokens = max(4096, min(8192, count($ids) * 24 + 512));
         $labels = [];
         $lastError = null;
         for ($attempt = 0; $attempt < 3 && $labels === []; $attempt++) {
             try {
-                $labels = parse_ai_labels(ai_chat($cfg, $messages), array_map('strval', $ids));
+                $labels = parse_ai_labels(ai_chat($cfg, $messages, $maxTokens), array_map('strval', $ids));
             } catch (Throwable $e) {
+                if ($e instanceof AiQuotaExhausted) {
+                    throw $e; // квота не освободится через полсекунды — не дёргаем провайдера
+                }
                 $lastError = $e;
                 usleep(500_000 * ($attempt + 1));
             }
