@@ -16,6 +16,10 @@ const DEFAULT_API_VERSION = '5.199';
 const CACHE_TTL_SECONDS = 300;
 const MAX_COUNT = 1000;
 const MAX_OFFSET = 100000;
+const DIAG_RATE_WINDOW = 3600;   // окно rate-limit для /diag, сек
+const DIAG_RATE_LIMIT = 60;      // запросов с одного IP за окно
+const DIAG_MAX_FILES = 500;      // сколько дампов диагностики хранить
+const DIAG_MAX_AGE_DAYS = 30;    // дольше — удаляем
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -40,6 +44,10 @@ function json_out(array $data, int $status = 200): never
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store, no-transform');
     header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
+    header('X-Frame-Options: DENY');
+    header('X-Request-Id: ' . request_id());
     header('Vary: Accept-Encoding');
 
     $acceptsGzip = stripos((string) ($_SERVER['HTTP_ACCEPT_ENCODING'] ?? ''), 'gzip') !== false;
@@ -57,6 +65,17 @@ function json_out(array $data, int $status = 200): never
 function fail(int $status, string $code, string $message, array $details = []): never
 {
     json_out(['error' => ['code' => $code, 'message' => $message, 'details' => $details ?: null]], $status);
+}
+
+/* Идентификатор запроса для сквозной трассировки: уходит в ответ заголовком
+ * X-Request-Id и попадает в лог ошибок, чтобы связать жалобу и запись. */
+function request_id(): string
+{
+    static $id = null;
+    if ($id === null) {
+        $id = bin2hex(random_bytes(8));
+    }
+    return $id;
 }
 
 function request_body(): array
@@ -1648,6 +1667,13 @@ function action_asset(): never
  */
 function action_diag(): never
 {
+    // Ограничение частоты по IP: маячок диагностики — best-effort, но не повод
+    // дать залить диск или память. Счётчики живут в private/diag/ratelimit.json.
+    $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
+    if (diag_rate_limited($ip)) {
+        fail(429, 'RATE_LIMITED', 'Слишком много диагностических запросов, попробуйте позже');
+    }
+
     $raw = (string) file_get_contents('php://input');
     if (strlen($raw) > 262144) {
         $raw = substr($raw, 0, 262144);
@@ -1658,6 +1684,7 @@ function action_diag(): never
     }
     $data['_server'] = [
         'time'            => date('c'),
+        'request_id'      => request_id(),
         'ip'              => $_SERVER['REMOTE_ADDR'] ?? null,
         'user_agent'      => $_SERVER['HTTP_USER_AGENT'] ?? null,
         'accept_encoding' => $_SERVER['HTTP_ACCEPT_ENCODING'] ?? null,
@@ -1674,7 +1701,106 @@ function action_diag(): never
         json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT),
         LOCK_EX,
     );
-    json_out(['ok' => true, 'file' => $file]);
+    diag_prune($dir);
+    json_out(['ok' => true, 'file' => $file, 'request_id' => request_id()]);
+}
+
+/*
+ * Скользящее окно по IP: не больше DIAG_RATE_LIMIT запросов за DIAG_RATE_WINDOW
+ * секунд. Возвращает true, если лимит исчерпан. При любой ошибке доступа к
+ * хранилищу не блокируем (лимит — мера гигиены, а не безопасности).
+ */
+function diag_rate_limited(string $ip): bool
+{
+    $dir = __DIR__ . '/private/diag';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return false;
+    }
+    $now = time();
+    $window = DIAG_RATE_WINDOW;
+    $limit = DIAG_RATE_LIMIT;
+    $key = substr(hash('sha256', $ip), 0, 16);
+    $path = $dir . '/ratelimit.json';
+
+    $fp = @fopen($path, 'c+');
+    if ($fp === false) {
+        return false;
+    }
+    if (!flock($fp, LOCK_EX)) {
+        fclose($fp);
+        return false;
+    }
+    $raw = stream_get_contents($fp);
+    $data = is_string($raw) && $raw !== '' ? json_decode($raw, true) : [];
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    $hits = [];
+    foreach ((array) ($data[$key] ?? []) as $t) {
+        if (is_int($t) && $now - $t < $window) {
+            $hits[] = $t;
+        }
+    }
+    $limited = count($hits) >= $limit;
+    if (!$limited) {
+        $hits[] = $now;
+    }
+    $data[$key] = $hits;
+
+    // Заодно выкидываем устаревшие окна, чтобы файл не разрастался.
+    foreach ($data as $k => $v) {
+        $keep = [];
+        foreach ((array) $v as $t) {
+            if (is_int($t) && $now - $t < $window) {
+                $keep[] = $t;
+            }
+        }
+        if ($keep === []) {
+            unset($data[$k]);
+        } else {
+            $data[$k] = $keep;
+        }
+    }
+
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, (string) json_encode($data));
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+    return $limited;
+}
+
+/* Ротация диагностики: удаляем дампы старше DIAG_MAX_AGE_DAYS и лишние сверх
+ * DIAG_MAX_FILES (самые старые первыми). ratelimit.json не трогаем. */
+function diag_prune(string $dir): void
+{
+    $files = glob($dir . '/*.json');
+    if (!is_array($files)) {
+        return;
+    }
+    $now = time();
+    $items = [];
+    foreach ($files as $f) {
+        if (basename($f) === 'ratelimit.json') {
+            continue;
+        }
+        $mtime = @filemtime($f) ?: 0;
+        if ($mtime > 0 && $now - $mtime > DIAG_MAX_AGE_DAYS * 86400) {
+            @unlink($f);
+            continue;
+        }
+        $items[] = [$mtime, $f];
+    }
+    if (count($items) <= DIAG_MAX_FILES) {
+        return;
+    }
+    usort($items, static fn(array $a, array $b): int => $a[0] <=> $b[0]);
+    $excess = count($items) - DIAG_MAX_FILES;
+    for ($i = 0; $i < $excess; $i++) {
+        @unlink($items[$i][1]);
+    }
 }
 
 /* ---------------------------------------------------------------- router */
@@ -1722,12 +1848,13 @@ function log_error(string $logAction, Throwable $e): void
         return;
     }
     $entry = json_encode([
-        'time'    => date('c'),
-        'action'  => $logAction,
-        'class'   => get_class($e),
-        'message' => $e->getMessage(),
-        'file'    => $e->getFile(),
-        'line'    => $e->getLine(),
+        'time'       => date('c'),
+        'request_id' => request_id(),
+        'action'     => $logAction,
+        'class'      => get_class($e),
+        'message'    => $e->getMessage(),
+        'file'       => $e->getFile(),
+        'line'       => $e->getLine(),
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
     $path = $dir . '/errors.log';
     if (is_file($path) && filesize($path) > 1048576) {

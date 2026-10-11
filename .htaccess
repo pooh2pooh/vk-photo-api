@@ -9,6 +9,16 @@
   <FilesMatch "\.(?:js|mjs|css)$">
     Header set Cache-Control "no-transform"
   </FilesMatch>
+
+  # Заголовки безопасности. CSP разрешает инлайновые скрипты/стили: загрузчик
+  # и фоллбэк-инъекция собирают страницу прямо на клиенте, а зеркала ассетов
+  # тянутся со внешних CDN/прокси.
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set X-Frame-Options "DENY"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains" env=HTTPS
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fastly.jsdelivr.net https://api.allorigins.win https://corsproxy.io https://api.codetabs.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fastly.jsdelivr.net https://api.allorigins.win https://corsproxy.io https://api.codetabs.com; img-src 'self' data: https:; connect-src 'self' https:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 </IfModule>
 
 <IfModule mod_deflate.c>

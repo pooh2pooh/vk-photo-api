@@ -903,8 +903,11 @@ function action_diag(): never
 - при необходимости — общий токен в запросе/заголовке;
 - `errors.log` — отдельный файл, ротируется по размеру (например, `> 1 MiB`).
 
-> **Долг проекта:** `action_diag` сейчас без авторизации, rate-limit и ротации.
-> В новом проекте заложи всё три сразу.
+> **Долг проекта закрыт:** `action_diag` получил json-кап (256 КБ), rate-limit по
+> IP (скользящее окно, `DIAG_RATE_LIMIT`/`DIAG_RATE_WINDOW`), уникальные имена
+> и ротацию (`diag_prune`: возраст `DIAG_MAX_AGE_DAYS`, количество
+> `DIAG_MAX_FILES`). Авторизация маячку намеренно не нужна — он должен работать
+> ещё до входа, поэтому защита строится на капе и лимитах.
 
 ---
 
@@ -1016,20 +1019,23 @@ function fail(int $status, string $code, string $message, array $details = []): 
 
 ### 6.9 Заголовки безопасности
 
-`json_out` и `asset` уже ставят `nosniff` и запрет кэша/трансформации. В новом
-проекте **добавь полноценный набор**:
+`json_out` и `asset` уже ставят `nosniff` и запрет кэша/трансформации. Полный
+набор выставляется в `.htaccess` (`mod_headers`), а критичные дублируются в
+`json_out` (`nosniff`, `Referrer-Policy`, `Permissions-Policy`, `X-Frame-Options`,
+`X-Request-Id`):
 
 ```
-Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' <cdn>; frame-ancestors 'none'; base-uri 'self'
+Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline' <cdn>; style-src 'self' 'unsafe-inline' <cdn>; connect-src 'self' https:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 Strict-Transport-Security: max-age=31536000; includeSubDomains
 Referrer-Policy: strict-origin-when-cross-origin
 Permissions-Policy: camera=(), microphone=(), geolocation=()
 X-Content-Type-Options: nosniff
 ```
 
-> **Долг проекта:** CSP/HSTS/Referrer-Policy/Permissions-Policy сейчас не
-> выставлены. Учти, что CDN-зеркала и CORS-прокси должны попасть в `script-src`/
-> `connect-src`, а инлайн-загрузчик потребует `'unsafe-inline'` или nonce.
+> **Долг проекта закрыт:** заголовки выставляются в `.htaccess`. Инлайн-загрузчик
+> и фоллбэк-инъекция требуют `'unsafe-inline'`, а CDN-зеркала и CORS-прокси
+> попадают в `script-src`/`style-src`. Для API те же заголовки (кроме CSP/HSTS)
+> дублируются в `json_out` — на случай, если `.htaccess` не обрабатывается.
 
 ### 6.10 Приватность / PII
 
@@ -1326,13 +1332,16 @@ if (is_file($path) && filesize($path) > 1048576) {
 @file_put_contents($path, $entry, LOCK_EX | FILE_APPEND);
 ```
 
-- запись содержит `time, action, class, message, file, line` — достаточно для
-  разбора, без секретов;
+- запись содержит `time, request_id, action, class, message, file, line` —
+  достаточно для разбора, без секретов;
+- **request-id** генерируется на каждый запрос, уходит в ответ заголовком
+  `X-Request-Id`, попадает в `errors.log` и в `_server` записи `/diag` — это
+  связывает жалобу клиента и серверный лог;
+- **retention:** `errors.log` ротируется по размеру (`> 1 MiB` → `errors.old.log`),
+  дампы `/diag` чистятся по возрасту (`DIAG_MAX_AGE_DAYS`) и количеству
+  (`DIAG_MAX_FILES`), а окна rate-limit — по времени;
 - уровни и причины: `ready` / `fallback:<code>` / `manual` для diag; `warn`/`error`
-  в терминале;
-- **чего не хватает** (заложи в новый проект): correlation/request-id для
-  сквозной трассировки клиент↔сервер↔внешний API, retention-политика для всех
-  логов и diag-файлов.
+  в терминале.
 
 ---
 
