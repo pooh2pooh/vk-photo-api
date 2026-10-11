@@ -16,7 +16,10 @@
     "build:icons": "bash scripts/make-icons.sh",
     "build:shell": "node scripts/build-shell.mjs",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "start": "npm run start --workspace server"
+    "start": "npm run start --workspace server",
+    "test": "node tests/run.mjs",
+    "test:shell": "node tests/e2e/test-shell.cjs",
+    "test:e2e": "node tests/run.mjs base features menu bad fallback-noai quota stacks-ai"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
