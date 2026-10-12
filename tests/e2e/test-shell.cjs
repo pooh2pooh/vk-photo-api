@@ -66,6 +66,9 @@ function makeEnv({ localStorage: ls = {}, mirrors = {}, fetchText = null, hangBo
   };
   els["shell-fallback"].classList.add("is-hidden");
   els["shell-log-toggle"].classList.add("is-hidden");
+  // Статический <link id="shell-css"> из <head> (загрузчик может сменить href).
+  els["shell-css"] = makeEl("link");
+  els["shell-css"].href = CSS;
 
   function capture(node) {
     node.parentNode = this;
@@ -554,6 +557,42 @@ const encode = (s) => encodeURIComponent(s);
     assert.equal(e.yielded.scripts[0].parentNode, null, "подвисший основной тег должен быть снят");
     assert.equal(e.yielded.scripts[1].src, mirror, "вместо него подключается зеркало");
     console.log("25. основной берётся с зеркала, подвисший <script> снимается: OK");
+  }
+
+  // 26. Режим origin: ассет → статика → зеркало.
+  {
+    const e = makeEnv({ asset: "./api.php?action=asset", mirrors: { mode: "origin" } });
+    assert.ok(e.yielded.scripts[0].src.indexOf("./api.php?action=asset") === 0, "origin без зеркал: ассет");
+    const mirror = "https://cdn.jsdelivr.net/gh/u/r@main/assets/app-X.js";
+    const e2 = makeEnv({ asset: "./api.php?action=asset", mirrors: { mode: "origin", js: [mirror] } });
+    assert.ok(e2.yielded.scripts[0].src.indexOf("./api.php?action=asset") === 0, "origin: основной — ассет");
+    console.log("26. режим origin: ассет основным источником: OK");
+  }
+
+  // 27. Режим mirror: основной CSS переводится на зеркало (href <link id=shell-css>).
+  {
+    const cssMirror = "https://cdn.jsdelivr.net/gh/u/r@main/assets/app-Y.css";
+    const e = makeEnv({ mirrors: { mode: "mirror", js: ["https://cdn.a/b.js"], css: [cssMirror] } });
+    assert.equal(e.els["shell-css"].href, cssMirror, "mirror: основной CSS — с зеркала");
+    console.log("27. режим mirror: основной CSS с зеркала: OK");
+  }
+
+  // 28. Режим origin: статический CSS не трогаем.
+  {
+    const cssMirror = "https://cdn.jsdelivr.net/gh/u/r@main/assets/app-Y.css";
+    const e = makeEnv({ mirrors: { mode: "origin", css: [cssMirror] } });
+    assert.equal(e.els["shell-css"].href, CSS, "origin: основной CSS — статика");
+    console.log("28. режим origin: основной CSS остаётся статическим: OK");
+  }
+
+  // 29. Режим auto: выбор по наличию зеркал.
+  {
+    const e1 = makeEnv({ asset: "./api.php?action=asset", mirrors: { mode: "auto" } });
+    assert.ok(e1.yielded.scripts[0].src.indexOf("./api.php?action=asset") === 0, "auto без зеркал → origin (ассет)");
+    const mirror = "https://cdn.jsdelivr.net/gh/u/r@main/assets/app-X.js";
+    const e2 = makeEnv({ asset: "./api.php?action=asset", mirrors: { mode: "auto", js: [mirror] } });
+    assert.equal(e2.yielded.scripts[0].src, mirror, "auto с зеркалами → mirror");
+    console.log("29. режим auto: выбор по наличию зеркал: OK");
   }
 
   console.log("\nВсе тесты загрузчика прошли.");

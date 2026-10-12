@@ -42,6 +42,16 @@
   var CSS_MIRRORS = MIRRORS.css || [];
   var PROXIES = MIRRORS.proxies || [];
 
+  // Режим раздачи бандла:
+  //   "mirror" (по умолчанию) — основной источник CDN-зеркало (хостинг вне РФ);
+  //   "origin" — основной источник сам хостинг (сервер в РФ, где origin быстрый);
+  //   "auto"   — "mirror", если зеркала заданы, иначе "origin".
+  // Значение берётся из shell-config.js (MIRRORS.mode) и может правиться на
+  // сервере вручную без пересборки; CONFIG.mode — значение по умолчанию из сборки.
+  var MODE = String(MIRRORS.mode || CONFIG.mode || "mirror").toLowerCase();
+  if (MODE !== "origin" && MODE !== "auto") MODE = "mirror";
+  if (MODE === "auto") MODE = JS_MIRRORS.length ? "mirror" : "origin";
+
   var JS_BASE = baseName(JS);
   var CSS_BASE = baseName(CSS);
 
@@ -887,12 +897,23 @@
     var srcIndex = 0;
     function tryNext() {
       if (window.__APP_READY__) { markReady(); return; }
-      if (srcIndex >= sources.length) { rangeActive = false; scheduleFallback("RESOURCES_UNAVAILABLE"); return; }
+      if (srcIndex >= sources.length) {
+        rangeActive = false;
+        // В режиме "origin" зеркало — резерв после Range-кусков.
+        if (MODE === "origin" && JS_MIRRORS.length) {
+          write("warn", "Яндекс.Браузер: зеркало как резерв");
+          runFromMirror(function () { scheduleFallback("RESOURCES_UNAVAILABLE"); });
+        } else {
+          scheduleFallback("RESOURCES_UNAVAILABLE");
+        }
+        return;
+      }
       armRangeWatchdog();
       rangeDownloadThenRun(sources[srcIndex++], tryNext);
     }
 
-    // Сначала — CDN-зеркало (один быстрый запрос по HTTP/2), затем Range-куски.
+    // Режим "mirror": сначала CDN-зеркало (один быстрый запрос по HTTP/2),
+    // затем Range-куски. Режим "origin": сразу Range-куски с самого хостинга.
     function tryMirrorThenRange() {
       if (JS_MIRRORS.length) {
         write("warn", "Яндекс.Браузер: пробую готовый бандл с зеркала");
@@ -915,8 +936,9 @@
       (function check() {
         if (window.__APP_READY__) { markReady(); return; }
         if (now() >= deadline) {
-          write("warn", "Кэш не запустился, пробую зеркало/Range");
-          tryMirrorThenRange();
+          write("warn", "Кэш не запустился, пробую " + (MODE === "origin" ? "Range-куски" : "зеркало/Range"));
+          if (MODE === "origin") tryNext();
+          else tryMirrorThenRange();
           return;
         }
         setTimeout(check, 100);
@@ -924,8 +946,13 @@
       return;
     }
 
-    write("warn", "Яндекс.Браузер: заряжаю бандл с зеркала или Range-кусками");
-    tryMirrorThenRange();
+    if (MODE === "origin") {
+      write("warn", "Яндекс.Браузер: заряжаю бандл Range-кусками с хостинга");
+      tryNext();
+    } else {
+      write("warn", "Яндекс.Браузер: заряжаю бандл с зеркала или Range-кусками");
+      tryMirrorThenRange();
+    }
   }
 
   // Последний резерв: забрать бандл через fetch и выполнить инлайн.
@@ -989,18 +1016,58 @@
     next();
   }
 
+  // Выбор основного источника JS по режиму раздачи.
+  function pickPrimaryJs() {
+    if (MODE === "origin") return JS_ASSET || JS;
+    return JS_MIRRORS.length ? JS_MIRRORS[0] : (JS_ASSET || JS);
+  }
+
+  // Выбор основного источника CSS по режиму. Пусто — оставить статический
+  // <link id="shell-css"> (origin-режим).
+  function pickPrimaryCss() {
+    if (MODE === "origin") return "";
+    return CSS_MIRRORS.length ? CSS_MIRRORS[0] : "";
+  }
+
+  // В режиме "mirror" переводим основной CSS на зеркало: меняем href уже
+  // существующего <link id="shell-css">, чтобы не ждать медленный origin.
+  // При ошибке запускается обычная цепочка резервов CSS (origin → зеркала).
+  function applyPrimaryCss() {
+    var url = pickPrimaryCss();
+    if (!url) return;
+    var link = $("shell-css");
+    if (link) {
+      write("net", "Основной CSS: " + url);
+      link.onerror = function () {
+        write("error", "Не загрузился основной CSS: " + url);
+        link.onerror = null;
+        startFallback("css");
+      };
+      link.href = url;
+    } else {
+      write("net", "Основной CSS: " + url);
+      injectCssUrl(url, function () { startFallback("css"); });
+    }
+  }
+
   function runJsFallback() {
-    // Порядок: копия из localStorage (мгновенно) → CDN-зеркала (включая
-    // прокси) → второй источник статикой. Статика последней: на «медленном»
-    // хостинге она как раз и подвисает.
+    // Порядок: копия из localStorage (мгновенно) → основные источники →
+    // резервы. Режим "mirror": сначала CDN-зеркала (включая прокси), затем
+    // статика. Режим "origin": сначала статика, затем зеркала.
     var steps = [];
     var cached = lsGet(JS_KEY);
     if (cached) steps.push({ cache: cached });
     var urls = mirrorChain("js");
-    for (var i = 0; i < urls.length; i++) steps.push({ url: urls[i] });
-    if (JS_ASSET && JS) steps.push({ url: JS, label: "static" });
+    var i;
+    if (MODE === "origin") {
+      if (JS) steps.push({ url: JS, label: "static" });
+      for (i = 0; i < urls.length; i++) steps.push({ url: urls[i] });
+    } else {
+      for (i = 0; i < urls.length; i++) steps.push({ url: urls[i] });
+      if (JS_ASSET && JS) steps.push({ url: JS, label: "static" });
+    }
 
-    write("warn", "Резервный запуск JS (вариантов: " + steps.length + ")");
+    write("warn", "Резервный запуск JS (вариантов: " + steps.length + ", режим: " + MODE + ")");
 
     // Основной <script src> мог «подвиснуть» — снимаем его, чтобы не держал load.
     clearRemoteScripts();
@@ -1161,7 +1228,7 @@
         userAgent: (typeof navigator !== "undefined" && navigator.userAgent) ? navigator.userAgent : "",
         ready: !!window.__APP_READY__,
         mounted: !!window.__VK_APP_MOUNTED__,
-        config: { js: JS, css: CSS, asset: ASSET },
+        config: { js: JS, css: CSS, asset: ASSET, mode: MODE },
         log: logLines.slice(),
         resourceTiming: collectResourceTiming(),
         navigation: collectNavigation(),
@@ -1230,6 +1297,7 @@
     if (window.__APP_READY__) { markReady(); return; }
 
     startReadyPoll();
+    applyPrimaryCss();
 
     if (JS_INLINE) {
       // Основной код уже в HTML: ждать загрузку внешнего файла нечего.
@@ -1247,14 +1315,15 @@
       return;
     }
 
-    // Основной бандл подключаем с CDN-зеркала, а не с same-origin. У этого
-    // хостинга большой same-origin ответ отдаётся по капле (218 КБ не доезжают
-    // за минуты, curl получает ~24 КБ за 30 с), а подвисший <script src> держит
-    // событие load — Safari показывает «бесконечную загрузку» даже когда UI уже
-    // поднялся. Кросс-доменный ответ CDN доезжает целиком, поэтому тег
-    // завершается и load наступает. PHP-ассет — резерв, когда зеркал нет.
-    var primaryUrl = JS_MIRRORS.length ? JS_MIRRORS[0] : (JS_ASSET || JS);
-    write("net", "Загрузка бандла: " + primaryUrl);
+    // Режим "mirror": основной бандл подключаем с CDN-зеркала, а не с
+    // same-origin. У хостинга вне РФ большой same-origin ответ отдаётся по
+    // капле (218 КБ не доезжают за минуты), а подвисший <script src> держит
+    // событие load — Safari показывает «бесконечную загрузку» даже когда UI
+    // уже поднялся. Кросс-доменный ответ CDN доезжает целиком.
+    // Режим "origin" (сервер в РФ): основной источник — PHP-ассет/статика,
+    // зеркала остаются резервом. Выбор режима — см. MODE выше.
+    var primaryUrl = pickPrimaryJs();
+    write("net", "Загрузка бандла: " + primaryUrl + " (режим: " + MODE + ")");
     injectJsUrl(primaryUrl);
 
     primaryTimer = setTimeout(function () {

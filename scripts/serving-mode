@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+#
+# serving-mode — переключение режима раздачи бандла для веб-проектов
+# (logus, vk-photo-api, …) и, при желании, проксирование Cloudflare.
+#
+# У каждого проекта рядом с index.html лежит shell-config.js, где поле `mode`
+# задаёт, откуда браузер берёт основной бандл:
+#   mirror — CDN-зеркало (хостинг вне РФ, напр. Oracle Amsterdam);
+#   origin — сам хостинг (сервер в РФ, где origin-ответ быстрый);
+#   auto   — mirror, если заданы зеркала, иначе origin.
+# Загрузчик читает это поле на лету, поэтому режим меняется правкой
+# shell-config.js без пересборки приложения.
+#
+# Использование:
+#   serving-mode [--root DIR] [--apply] [mirror|origin|auto] [project ...]
+#   serving-mode [--root DIR] [--apply] --cf on|off [--zone ZONE] [--record NAME]
+#
+# Без --apply печатается только план изменений (dry-run, ничего не трогается).
+# Если проекты не указаны — режим применяется ко всем каталогам с
+# shell-config.js внутри --root (по умолчанию /var/www/html/project).
+# Текущий режим также пишется в файл состояния <root>/.serving-mode.
+#
+# Переключение Cloudflare (--cf) требует токена с правом Zone → DNS → Edit:
+#   CF_API_TOKEN=... serving-mode --apply --cf on
+# Зона определяется по имени записи (--record, по умолчанию manjaro.yjjx.org):
+# берутся два последних домена (yjjx.org). Можно задать и явно: --zone yjjx.org.
+#
+set -euo pipefail
+
+ROOT="/var/www/html/project"
+APPLY=0
+DO_CF=""
+CF_ZONE=""
+CF_RECORD="manjaro.yjjx.org"
+MODE=""
+PROJECTS=()
+
+usage() {
+  sed -n '2,40p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'
+  exit "${1:-0}"
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root)   ROOT="$2"; shift 2 ;;
+    --apply)  APPLY=1; shift ;;
+    --cf)     DO_CF="$2"; shift 2 ;;
+    --zone)   CF_ZONE="$2"; shift 2 ;;
+    --record) CF_RECORD="$2"; shift 2 ;;
+    -h|--help) usage 0 ;;
+    mirror|origin|auto) MODE="$1"; shift ;;
+    -*) echo "serving-mode: неизвестный флаг: $1" >&2; usage 1 ;;
+    *)  PROJECTS+=("$1"); shift ;;
+  esac
+done
+
+if [ -z "$MODE" ] && [ -z "$DO_CF" ]; then
+  echo "serving-mode: укажите режим (mirror|origin|auto) и/или --cf on|off" >&2
+  usage 1
+fi
+if [ -n "$DO_CF" ] && [ "$DO_CF" != "on" ] && [ "$DO_CF" != "off" ]; then
+  echo "serving-mode: --cf принимает on|off" >&2
+  exit 1
+fi
+
+# Список каталогов-проектов.
+targets() {
+  if [ "${#PROJECTS[@]}" -gt 0 ]; then
+    local p
+    for p in "${PROJECTS[@]}"; do printf '%s\n' "$ROOT/$p"; done
+  else
+    local d
+    for d in "$ROOT"/*/; do
+      [ -d "$d" ] || continue
+      if [ -f "${d}shell-config.js" ]; then printf '%s\n' "${d%/}"; fi
+    done
+  fi
+}
+
+# --- Смена режима в shell-config.js -----------------------------------------
+if [ -n "$MODE" ]; then
+  found=0
+  while IFS= read -r dir; do
+    found=1
+    f="$dir/shell-config.js"
+    if [ ! -f "$f" ]; then
+      echo "serving-mode: пропуск (нет shell-config.js): $dir"
+      continue
+    fi
+    cur="$(grep -oE 'mode:[[:space:]]*"[a-z]+"' "$f" | head -1 | grep -oE '"[a-z]+"' | tr -d '"' || true)"
+    if [ "$cur" = "$MODE" ]; then
+      echo "serving-mode: уже $MODE: $f"
+      continue
+    fi
+    if [ "$APPLY" = 1 ]; then
+      sed -i -E "0,/mode:[[:space:]]*\"[a-z]+\"/s//mode: \"$MODE\"/" "$f"
+      echo "serving-mode: ${cur:-?} → $MODE: $f"
+    else
+      echo "[dry-run] ${cur:-?} → $MODE: $f"
+    fi
+  done < <(targets)
+
+  if [ "$found" = 0 ]; then
+    echo "serving-mode: не найдено проектов с shell-config.js в $ROOT" >&2
+    exit 1
+  fi
+
+  if [ "$APPLY" = 1 ]; then
+    printf '%s\n' "$MODE" > "$ROOT/.serving-mode"
+    echo "serving-mode: состояние записано в $ROOT/.serving-mode"
+  fi
+fi
+
+# --- Переключение проксирования Cloudflare ----------------------------------
+if [ -n "$DO_CF" ]; then
+  if [ -z "$CF_ZONE" ]; then
+    CF_ZONE="$(printf '%s' "$CF_RECORD" | awk -F. '{ if (NF > 2) printf "%s.%s", $(NF-1), $NF; else print $0 }')"
+  fi
+  proxied=false
+  [ "$DO_CF" = "on" ] && proxied=true
+
+  if [ "$APPLY" != 1 ]; then
+    echo "[dry-run] Cloudflare: $CF_RECORD (зона $CF_ZONE) proxied=$proxied"
+  else
+    : "${CF_API_TOKEN:?нужен CF_API_TOKEN в окружении (Zone → DNS → Edit)}"
+    CF_ZONE="$CF_ZONE" CF_RECORD="$CF_RECORD" CF_PROXIED="$proxied" \
+      python3 - <<'PY'
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+API = "https://api.cloudflare.com/client/v4"
+TOKEN = os.environ["CF_API_TOKEN"]
+ZONE = os.environ["CF_ZONE"]
+RECORD = os.environ["CF_RECORD"]
+PROXIED = os.environ["CF_PROXIED"] == "true"
+
+
+def call(method, path, payload=None):
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(API + path, data=data, method=method)
+    req.add_header("Authorization", "Bearer " + TOKEN)
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        body = json.loads(exc.read().decode() or "{}")
+    if not body.get("success"):
+        raise SystemExit("Cloudflare API: " + json.dumps(body.get("errors"), ensure_ascii=False))
+    return body["result"]
+
+
+zones = call("GET", "/zones?name=" + ZONE)
+if not zones:
+    raise SystemExit("Cloudflare: зона не найдена: " + ZONE)
+zone_id = zones[0]["id"]
+
+records = call("GET", "/zones/%s/dns_records?type=A&name=%s" % (zone_id, RECORD))
+if not records:
+    raise SystemExit("Cloudflare: A-запись не найдена: " + RECORD)
+rec = records[0]
+if rec["proxied"] == PROXIED:
+    print("Cloudflare: %s уже proxied=%s" % (RECORD, PROXIED))
+    sys.exit(0)
+rec = call("PATCH", "/zones/%s/dns_records/%s" % (zone_id, rec["id"]), {"proxied": PROXIED})
+print("Cloudflare: %s proxied %s → %s (IP %s)" % (RECORD, not PROXIED, rec["proxied"], rec["content"]))
+PY
+  fi
+fi

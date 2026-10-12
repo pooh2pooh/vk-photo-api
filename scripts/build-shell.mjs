@@ -65,6 +65,13 @@ function mirrorUrls(repo, file) {
     `https://fastly.jsdelivr.net/gh/${repo}@main/assets/${file}`,
   ];
 }
+// Режим раздачи бандла: mirror (CDN-зеркало, хостинг вне РФ) | origin (сам
+// хостинг, сервер в РФ) | auto. По умолчанию mirror; переопределяется
+// переменной окружения SERVE_MODE. На сервере готовый shell-config.js правится
+// вручную (см. docs/DEPLOYMENT.md, скрипт serving-mode).
+const serveMode = (process.env.SERVE_MODE || "mirror").toLowerCase();
+const mode = ["mirror", "origin", "auto"].indexOf(serveMode) === -1 ? "mirror" : serveMode;
+
 const repo = detectRepo();
 const jsMirrors = mirrorUrls(repo, jsName);
 const cssMirrors = mirrorUrls(repo, cssName);
@@ -79,6 +86,7 @@ const assetEndpoint = hasApi ? "./api.php?action=asset" : "";
 const diagEndpoint = hasApi ? "./api.php?action=diag" : "";
 
 const configInline = `window.__VK_SHELL_CONFIG__ = {
+  mode: ${JSON.stringify(mode)},
   js: "./assets/${jsName}",
   css: "./assets/${cssName}",
   asset: ${JSON.stringify(assetEndpoint)},
@@ -178,7 +186,7 @@ ${iconLinks}
       }
       [hidden] { display: none !important; }
     </style>
-    <link rel="stylesheet" href="./assets/${cssName}" />
+    <link id="shell-css" rel="stylesheet" href="./assets/${cssName}" />
     <script>${configInline}</script>
     <script>window.__VK_SHELL_EARLY_ERRORS__=[];window.addEventListener("error",function(e){var a=window.__VK_SHELL_EARLY_ERRORS__;if(a&&a.length<50)a.push(e);},true);</script>
   </head>
@@ -204,6 +212,7 @@ ${iconLinks}
 writeFileSync(path.join(root, "index.html"), shellHtml);
 const cfgTemplate = readFileSync(path.join(webDir, "shell-config.js"), "utf8");
 const shellCfg = cfgTemplate
+  .replace("%%SERVE_MODE%%", JSON.stringify(mode))
   .replace("%%JS_MIRRORS%%", JSON.stringify(jsMirrors, null, 4).replace(/\n\]/, "\n  ]"))
   .replace("%%CSS_MIRRORS%%", JSON.stringify(cssMirrors, null, 4).replace(/\n\]/, "\n  ]"));
 writeFileSync(path.join(root, "shell-config.js"), shellCfg);
@@ -221,4 +230,4 @@ try {
   if (error.code !== "ENOENT") throw error;
 }
 
-console.log(`build-shell: собран отказоустойчивый index.html (${jsName}, ${cssName}${removed ? `, удалено ассетов: ${removed}` : ""})`);
+console.log(`build-shell: собран отказоустойчивый index.html (${jsName}, ${cssName}, режим: ${mode}${removed ? `, удалено ассетов: ${removed}` : ""})`);
